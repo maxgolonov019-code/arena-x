@@ -1,100 +1,31 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#10131c">
-    <title>Top Arena 2D</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <canvas id="game"></canvas>
+    <title>Neon Strike</title>
 
-    <div id="hud">
-        <div class="topbar">
-            <div class="stat">
-                <span>❤️</span>
-                <b id="health">100 / 100</b>
-            </div>
-            <div class="stat">
-                <span>🪙</span>
-                <b id="coins">100</b>
-            </div>
-            <div class="stat">
-                <span>⭐</span>
-                <b id="level">Ур. 1</b>
-            </div>
-            <button id="shopButton">МАГАЗИН</button>
-        </div>
-
-        <div class="bottomHud">
-            <div id="weaponInfo">
-                <b id="weaponName">Пистолет</b>
-                <span id="ammo">∞</span>
-            </div>
-            <button id="superButton">
-                <span>⚡</span>
-                <b id="superName">Суперудар</b>
-                <small id="superStatus">Не куплено</small>
-            </button>
-        </div>
-
-        <div id="joystick">
-            <div id="stick"></div>
-        </div>
-
-        <button id="shootButton">ОГОНЬ</button>
-        <button id="reloadButton">↻</button>
-        <div id="message"></div>
-    </div>
-
-    <div id="menu" class="overlay">
-        <div class="panel">
-            <h1>TOP <span>ARENA</span></h1>
-            <p>2D-битва с видом сверху</p>
-            <input id="playerName" maxlength="16"
-                   placeholder="Имя игрока" value="Игрок">
-            <button id="startButton">ИГРАТЬ</button>
-            <p class="hint">WASD — движение · Мышь — прицел · Пробел — огонь</p>
-        </div>
-    </div>
-
-    <div id="shop" class="overlay hidden">
-        <div class="panel shopPanel">
-            <div class="shopHeader">
-                <h2>МАГАЗИН</h2>
-                <button id="closeShop">✕</button>
-            </div>
-            <div class="moneyLine">Твои монеты: <b id="shopCoins">100</b> 🪙</div>
-            <div id="shopItems"></div>
-        </div>
-    </div>
-
-    <style id="dynamicStyles">
+    <style>
         * {
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
         }
 
-        html, body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #10131c;
-            color: white;
-            font-family: Arial, sans-serif;
-            touch-action: none;
+        :root {
+            --accent: #6c8cff;
+            --panel: rgba(18, 23, 37, 0.94);
+            --text: #f4f6ff;
         }
 
-        #game {
-            position: fixed;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            display: block;
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #10131c;
+            color: var(--text);
+            font: 14px Arial, sans-serif;
+            user-select: none;
+            touch-action: none;
         }
 
         button, input {
@@ -103,276 +34,460 @@
 
         button {
             color: white;
-            background: #526dff;
-            border: 0;
+            border: 1px solid #414b68;
+            background: #252d43;
             border-radius: 10px;
-            padding: 11px 14px;
-            font-weight: bold;
+            padding: 11px 15px;
+            cursor: pointer;
         }
 
         button:active {
-            transform: scale(.96);
+            transform: scale(0.96);
         }
 
-        #hud {
+        #game {
             position: fixed;
             inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        .hud {
+            position: fixed;
+            z-index: 5;
             pointer-events: none;
         }
 
-        #hud button, #joystick {
-            pointer-events: auto;
-            user-select: none;
-        }
-
-        .topbar {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            padding: 12px;
-        }
-
-        .stat {
-            display: flex;
-            gap: 5px;
-            align-items: center;
-            background: #171d2be8;
-            border: 1px solid #343d54;
-            border-radius: 9px;
-            padding: 9px;
-            font-size: 12px;
-        }
-
-        #shopButton {
-            margin-left: auto;
-            background: #f2a93b;
-            color: #211708;
-        }
-
-        .bottomHud {
-            position: absolute;
+        .topHud {
+            top: 12px;
+            left: 12px;
             right: 12px;
-            bottom: 18px;
             display: flex;
-            align-items: end;
+            align-items: flex-start;
+            justify-content: space-between;
             gap: 8px;
         }
 
-        #weaponInfo {
-            display: grid;
-            gap: 6px;
-            padding: 11px;
-            min-width: 105px;
-            border-radius: 10px;
-            background: #171d2be8;
-            border: 1px solid #343d54;
+        .stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            max-width: 75%;
         }
 
-        #weaponInfo span {
-            color: #b6c3e3;
-            font-size: 12px;
+        .stat {
+            background: var(--panel);
+            border: 1px solid #343d56;
+            padding: 9px 11px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px #0004;
+        }
+
+        .stat strong {
+            color: #8eabff;
+        }
+
+        #health {
+            color: #ff6d7d;
+        }
+
+        #coins {
+            color: #ffd76a;
+        }
+
+        #connection {
+            margin-top: 5px;
+            color: #ffcf6b;
+            font-size: 11px;
+        }
+
+        #shopButton {
+            pointer-events: auto;
+            background: #596fe0;
+            border-color: #8192ff;
+            font-weight: bold;
+        }
+
+        .bottomHud {
+            left: 50%;
+            bottom: 15px;
+            transform: translateX(-50%);
+            text-align: center;
+            background: var(--panel);
+            border: 1px solid #343d56;
+            border-radius: 12px;
+            padding: 10px 16px;
+            min-width: 155px;
+        }
+
+        #weaponName {
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        #ammo {
+            margin-top: 4px;
+            color: #b9c5e8;
         }
 
         #superButton {
-            background: #9b42e8;
-            min-width: 110px;
-            display: grid;
-            gap: 4px;
+            margin-top: 8px;
+            padding: 7px 10px;
+            background: #47316f;
+            border-color: #9169df;
         }
 
-        #superButton span {
-            font-size: 20px;
+        #superStatus {
+            display: block;
+            margin-top: 4px;
+            color: #c6a8ff;
+            font-size: 11px;
         }
 
-        #superButton small {
-            font-size: 10px;
+        .control {
+            position: fixed;
+            z-index: 6;
+            pointer-events: auto;
+            touch-action: none;
         }
 
         #joystick {
-            position: absolute;
             left: 22px;
-            bottom: 25px;
-            width: 122px;
-            height: 122px;
+            bottom: 28px;
+            width: 116px;
+            height: 116px;
             border-radius: 50%;
-            background: #d5e0ff22;
-            border: 2px solid #d5e0ff55;
-            display: grid;
-            place-items: center;
+            border: 2px solid #7784a766;
+            background: #202a4080;
         }
 
         #stick {
+            position: absolute;
             width: 48px;
             height: 48px;
+            left: 32px;
+            top: 32px;
             border-radius: 50%;
-            background: #829bffcc;
-            border: 2px solid #dce4ff;
-            box-shadow: 0 3px 12px #0005;
+            background: #91a9ffb8;
+            border: 2px solid #c1ceff;
+            box-shadow: 0 0 15px #698aff55;
+        }
+
+        .actionButton {
+            width: 65px;
+            height: 65px;
+            border-radius: 50%;
+            font-weight: bold;
+            background: #343d5dcc;
+            border: 2px solid #8b9ac9;
         }
 
         #shootButton {
-            position: absolute;
-            right: 22px;
-            bottom: 125px;
-            width: 76px;
-            height: 76px;
-            border-radius: 50%;
-            background: #ef4d5b;
-            border: 3px solid #ffb3ba;
+            right: 23px;
+            bottom: 38px;
+            width: 82px;
+            height: 82px;
+            background: #a8324ddd;
+            border-color: #ff8392;
         }
 
         #reloadButton {
-            position: absolute;
-            right: 29px;
-            bottom: 210px;
-            width: 46px;
-            height: 42px;
-            background: #394761;
-            font-size: 22px;
+            right: 32px;
+            bottom: 132px;
         }
 
         #message {
-            position: absolute;
-            top: 80px;
+            position: fixed;
+            z-index: 8;
             left: 50%;
+            top: 23%;
             transform: translateX(-50%);
-            background: #171d2be8;
-            border-radius: 9px;
-            padding: 10px 14px;
+            max-width: 85%;
+            padding: 10px 16px;
+            text-align: center;
+            border-radius: 10px;
+            background: #111827eF;
+            border: 1px solid #4b5c85;
             opacity: 0;
-            transition: opacity .2s;
-            white-space: nowrap;
+            transition: opacity 0.2s;
+            pointer-events: none;
         }
 
         .overlay {
             position: fixed;
+            z-index: 20;
             inset: 0;
-            z-index: 10;
-            display: grid;
-            place-items: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             padding: 18px;
-            background: #070a12cc;
-        }
-
-        .hidden {
-            display: none !important;
+            background: #080b13d9;
+            overflow-y: auto;
+            touch-action: pan-y;
         }
 
         .panel {
             width: min(420px, 100%);
-            max-height: 90vh;
-            overflow: auto;
             padding: 24px;
-            border: 1px solid #35415d;
             border-radius: 18px;
-            background: #171d2b;
-            box-shadow: 0 20px 80px #0008;
+            background: #171d2c;
+            border: 1px solid #3d4968;
+            box-shadow: 0 15px 60px #0008;
+            text-align: center;
         }
 
-        h1 {
+        .panel h1 {
+            margin: 0 0 8px;
             font-size: 32px;
-            margin: 0;
-            letter-spacing: 2px;
+            letter-spacing: 1px;
         }
 
-        h1 span {
-            color: #8095ff;
-        }
-
-        .panel > p {
-            color: #aab6d0;
+        .subtitle {
+            color: #aab6d7;
             line-height: 1.5;
+            margin: 10px 0 20px;
         }
 
-        input {
+        #playerName {
             width: 100%;
-            padding: 13px;
-            border-radius: 9px;
-            border: 1px solid #3b4864;
-            background: #0d1220;
+            padding: 12px;
+            margin: 6px 0 12px;
             color: white;
-            margin: 10px 0;
+            background: #0e1320;
+            border: 1px solid #424e6c;
+            border-radius: 10px;
             outline: none;
+        }
+
+        #playerName:focus {
+            border-color: var(--accent);
         }
 
         #startButton {
             width: 100%;
-            margin-top: 8px;
-            padding: 14px;
-            background: #526dff;
-        }
-
-        .hint {
-            font-size: 11px;
+            background: #526be0;
+            border-color: #8194ff;
+            font-weight: bold;
+            padding: 13px;
         }
 
         .shopPanel {
-            padding: 18px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
         }
 
         .shopHeader {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 10px;
         }
 
         .shopHeader h2 {
             margin: 0;
         }
 
-        #closeShop {
-            padding: 7px 11px;
-            background: #39445a;
+        #shopCoins {
+            color: #ffd76a;
+            margin: 12px 0;
         }
 
-        .moneyLine {
-            margin: 15px 0;
-            color: #f2c36e;
+        #shopItems {
+            overflow-y: auto;
+            touch-action: pan-y;
+            text-align: left;
         }
 
         .shopItem {
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            justify-content: space-between;
             gap: 10px;
-            margin: 8px 0;
-            padding: 12px;
-            border-radius: 11px;
-            background: #222b3e;
+            padding: 12px 0;
+            border-bottom: 1px solid #303950;
         }
 
-        .shopItem div {
+        .itemInfo {
             min-width: 0;
         }
 
-        .shopItem strong {
+        .itemInfo strong {
             display: block;
             margin-bottom: 5px;
         }
 
-        .shopItem small {
-            color: #aab6d0;
+        .itemInfo small {
+            display: block;
+            color: #aab6d7;
             line-height: 1.4;
         }
 
-        .shopItem button {
+        .buyButton {
+            flex-shrink: 0;
+            background: #354a85;
+        }
+
+        #closeShop {
+            margin-top: 12px;
             flex-shrink: 0;
         }
 
-        @media (min-width: 700px) {
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 480px) {
+            .topHud {
+                top: 8px;
+                left: 8px;
+                right: 8px;
+            }
+
+            .stats {
+                gap: 5px;
+            }
+
+            .stat {
+                padding: 7px 8px;
+                font-size: 12px;
+            }
+
+            #shopButton {
+                padding: 9px 11px;
+            }
+
+            .bottomHud {
+                bottom: 12px;
+                min-width: 130px;
+                padding: 8px 11px;
+            }
+
             #joystick {
-                width: 135px;
-                height: 135px;
+                width: 105px;
+                height: 105px;
+                left: 15px;
+                bottom: 22px;
+            }
+
+            #stick {
+                left: 27px;
+                top: 27px;
             }
 
             #shootButton {
-                width: 88px;
-                height: 88px;
+                right: 15px;
+                bottom: 30px;
+                width: 74px;
+                height: 74px;
+            }
+
+            #reloadButton {
+                right: 24px;
+                bottom: 117px;
+                width: 58px;
+                height: 58px;
+            }
+
+            .panel {
+                padding: 20px;
             }
         }
     </style>
+</head>
+
+<body>
+    <canvas id="game"></canvas>
+
+    <div class="hud topHud">
+        <div class="stats">
+            <div class="stat">
+                ❤️ <strong id="health">100</strong>
+            </div>
+
+            <div class="stat">
+                🪙 <strong id="coins">100</strong>
+            </div>
+
+            <div class="stat">
+                Уровень <strong id="level">1</strong>
+            </div>
+
+            <div class="stat">
+                Игроки <strong id="playerCount">1</strong>
+                <div id="connection">● Одиночная игра</div>
+            </div>
+        </div>
+
+        <button id="shopButton">МАГАЗИН</button>
+    </div>
+
+    <div class="hud bottomHud">
+        <div id="weaponName">Пистолет</div>
+        <div id="ammo">12 / 12</div>
+
+        <button id="superButton">
+            <span id="superName">Суперспособность</span>
+        </button>
+
+        <span id="superStatus">Не выбрана</span>
+    </div>
+
+    <div id="joystick" class="control">
+        <div id="stick"></div>
+    </div>
+
+    <button id="shootButton" class="control actionButton">
+        ОГОНЬ
+    </button>
+
+    <button id="reloadButton" class="control actionButton">
+        ↻
+    </button>
+
+    <div id="message"></div>
+
+    <div id="menu" class="overlay">
+        <div class="panel">
+            <h1>NEON STRIKE</h1>
+
+            <p class="subtitle">
+                Сражайся с ботами, собирай монеты,
+                покупай оружие и открывай способности.
+            </p>
+
+            <input
+                id="playerName"
+                type="text"
+                maxlength="16"
+                placeholder="Имя игрока"
+                autocomplete="off"
+            >
+
+            <button id="startButton">НАЧАТЬ ИГРУ</button>
+
+            <p class="subtitle">
+                Управление: джойстик — движение,
+                касание поля — прицеливание.
+            </p>
+        </div>
+    </div>
+
+    <div id="shop" class="overlay hidden">
+        <div class="panel shopPanel">
+            <div class="shopHeader">
+                <h2>Магазин</h2>
+                <button id="closeShop">✕</button>
+            </div>
+
+            <div id="shopCoins">Монеты: 100</div>
+
+            <div id="shopItems"></div>
+        </div>
+    </div>
 
     <script src="game.js"></script>
 </body>
 </html>
-    
