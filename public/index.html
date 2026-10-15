@@ -1,0 +1,105 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#15251d">
+    <title>ARENA X — Открытый мир</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="game">
+        <canvas id="gameCanvas"></canvas>
+
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark">X</span>
+                <div>
+                    <strong>ARENA X</strong>
+                    <small>ОТКРЫТЫЙ МИР</small>
+                </div>
+            </div>
+
+            <div class="online">
+                <span class="online-dot"></span>
+                <span id="onlineCount">0 игроков</span>
+            </div>
+        </header>
+
+        <section class="player-panel">
+            <div class="player-line">
+                <span id="playerName">Подключение...</span>
+                <span id="hpText">100 / 100</span>
+            </div>
+
+            <div class="health-track">
+                <div id="healthFill" class="health-fill"></div>
+            </div>
+
+            <div id="statusText" class="status">
+                Подключаемся к серверу...
+            </div>
+        </section>
+
+        <div class="world-label">ЗЕЛЁНАЯ ДОЛИНА</div>
+
+        <section id="nameScreen" class="overlay">
+            <form id="nameForm" class="name-card">
+                <div class="logo-large">X</div>
+                <h1>ARENA X</h1>
+                <p>Твой мир. Твои правила.</p>
+
+                <label for="nameInput">Имя персонажа</label>
+                <input
+                    id="nameInput"
+                    type="text"
+                    maxlength="16"
+                    minlength="1"
+                    placeholder="Например, Shadow"
+                    autocomplete="nickname"
+                    required
+                >
+
+                <button type="submit" id="playButton">
+                    Войти в мир
+                </button>
+
+                <small id="connectionText">
+                    Ожидаем соединения с сервером...
+                </small>
+            </form>
+        </section>
+
+        <section class="mobile-controls" aria-label="Управление">
+            <div class="movement-pad">
+                <button class="move up" data-move="up" aria-label="Вверх">▲</button>
+                <button class="move left" data-move="left" aria-label="Влево">◀</button>
+                <button class="move down" data-move="down" aria-label="Вниз">▼</button>
+                <button class="move right" data-move="right" aria-label="Вправо">▶</button>
+            </div>
+
+            <div class="attack-pad">
+                <button id="magicButton" class="attack magic">
+                    <span>✦</span>
+                    <small>МАГИЯ</small>
+                </button>
+
+                <button id="meleeButton" class="attack melee">
+                    <span>⚔</span>
+                    <small>УДАР</small>
+                </button>
+            </div>
+        </section>
+
+        <footer class="bottom-hint">
+            <span>WASD — движение</span>
+            <span>J — удар</span>
+            <span>K — магия</span>
+        </footer>
+    </main>
+
+    <script src="game.js"></script>
+</body>
+</html>
+              
