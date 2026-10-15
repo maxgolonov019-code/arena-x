@@ -1,151 +1,143 @@
-
 "use strict";
 
-const THREE = window.THREE;
-
-if (!THREE) {
-    document.getElementById("connectionText").textContent =
-        "Не загрузился Three.js. Проверь подключение к интернету.";
-    throw new Error("Three.js не загружен");
-}
-
-const worldElement = document.getElementById("world");
-const menuScreen = document.getElementById("menuScreen");
-const lobbyScreen = document.getElementById("lobbyScreen");
-const shopScreen = document.getElementById("shopScreen");
-
-const nameInput = document.getElementById("nameInput");
-const playButton = document.getElementById("playButton");
-const connectionText = document.getElementById("connectionText");
-const gameStatus = document.getElementById("gameStatus");
-
-const coinsElement = document.getElementById("coins");
-const levelElement = document.getElementById("level");
-const healthFill = document.getElementById("healthFill");
-const healthText = document.getElementById("healthText");
-const xpFill = document.getElementById("xpFill");
-const xpText = document.getElementById("xpText");
-
-const joystick = document.getElementById("joystick");
-const joystickKnob = document.getElementById("joystickKnob");
+/* =========================================================
+   MULTIPLAYER 3D — game.js
+   Three.js r128, управление для Android и ПК
+   ========================================================= */
 
 const WORLD = {
     width: 240,
     depth: 180
 };
 
-let socket = null;
-let myId = null;
-let connected = false;
-let joined = false;
-
-let players = [];
-let projectiles = [];
-
-const remoteModels = new Map();
-const projectileModels = new Map();
-const obstacleColliders = [];
-
-const input = {
-    forward: 0,
-    side: 0
+const CONFIG = {
+    walkSpeed: 7,
+    lookSensitivity: 0.012,
+    verticalSensitivity: 0.009,
+    minPitch: -1.1,
+    maxPitch: 1.1,
+    cameraHeight: 1.65,
+    cameraSmoothness: 14,
+    attackCooldown: 450
 };
-
-const cameraControl = {
-    yaw: 0,
-    pitch: 0
-};
-
-const joystickState = {
-    active: false,
-    pointerId: null,
-    x: 0,
-    y: 0,
-    maxDistance: 38
-};
-
-const pointerLook = {
-    active: false,
-    pointerId: null,
-    x: 0,
-    y: 0
-};
-
-let lastInputTime = 0;
-let lastHudTime = 0;
-let toastTimer = null;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color("#a8c9b4");
-scene.fog = new THREE.Fog("#a8c9b4", 55, 155);
+scene.background = new THREE.Color("#9bc8e8");
+scene.fog = new THREE.Fog("#9bc8e8", 65, 210);
 
 const camera = new THREE.PerspectiveCamera(
-    76,
+    75,
     window.innerWidth / window.innerHeight,
     0.1,
-    260
+    500
 );
 
-camera.rotation.order = "YXZ";
-scene.add(camera);
-
 const renderer = new THREE.WebGLRenderer({
-    antialias: window.devicePixelRatio < 2,
+    antialias: true,
     powerPreference: "high-performance"
 });
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
-renderer.shadowMap.enabled = false;
 
-worldElement.appendChild(renderer.domElement);
+document.body.style.margin = "0";
+document.body.style.overflow = "hidden";
+document.body.appendChild(renderer.domElement);
 
-// СВЕТ
+renderer.domElement.style.position = "fixed";
+renderer.domElement.style.inset = "0";
+renderer.domElement.style.width = "100%";
+renderer.domElement.style.height = "100%";
+renderer.domElement.style.touchAction = "none";
+renderer.domElement.style.zIndex = "0";
 
-scene.add(new THREE.HemisphereLight("#e3f5ff", "#526b43", 1.6));
+/* ---------- ОСВЕЩЕНИЕ ---------- */
 
-const sunlight = new THREE.DirectionalLight("#fff0d3", 1.5);
-sunlight.position.set(-40, 90, 30);
+scene.add(new THREE.HemisphereLight("#e4f3ff", "#536047", 2));
+
+const sunlight = new THREE.DirectionalLight("#ffffff", 2.1);
+sunlight.position.set(50, 90, 35);
 scene.add(sunlight);
 
-// МАТЕРИАЛЫ
+/* ---------- СОСТОЯНИЕ ИГРЫ ---------- */
+
+let socket = null;
+let connected = false;
+let joined = false;
+let myId = null;
+
+let players = [];
+let projectiles = [];
+
+let cameraYaw = 0;
+let cameraPitch = -0.12;
+
+let moveX = 0;
+let moveY = 0;
+
+let lastAttack = 0;
+let lastInputSend = 0;
+let lastFrame = performance.now();
+
+let playerData = {
+    x: WORLD.width / 2,
+    y: 0,
+    z: WORLD.depth / 2,
+    yaw: 0,
+    hp: 100,
+    maxHp: 100,
+    level: 1,
+    xp: 0,
+    coins: 0,
+    damage: 10,
+    speed: CONFIG.walkSpeed
+};
+
+const remoteModels = new Map();
+const projectileModels = new Map();
+
+const clock = new THREE.Clock();
+
+/* ---------- МАТЕРИАЛЫ ---------- */
 
 const materials = {
     grass: new THREE.MeshStandardMaterial({
-        color: "#779e57",
+        color: "#638b4d",
         roughness: 1
     }),
-    treeTrunk: new THREE.MeshStandardMaterial({
-        color: "#795439",
+    dirt: new THREE.MeshStandardMaterial({
+        color: "#8a7655",
+        roughness: 1
+    }),
+    tree: new THREE.MeshStandardMaterial({
+        color: "#62462d"
+    }),
+    leaves: new THREE.MeshStandardMaterial({
+        color: "#315f35",
         roughness: 1
     }),
     rock: new THREE.MeshStandardMaterial({
-        color: "#7d8c79",
+        color: "#777d80",
         roughness: 1
     }),
-    cover: new THREE.MeshStandardMaterial({
-        color: "#8b7755",
-        roughness: 1
+    player: new THREE.MeshStandardMaterial({
+        color: "#438bff",
+        roughness: 0.8
     }),
-    boundary: new THREE.MeshStandardMaterial({
-        color: "#d5dfb2",
-        roughness: 1
-    }),
-    water: new THREE.MeshStandardMaterial({
-        color: "#4e9fb6",
-        roughness: 0.35,
-        metalness: 0.05
+    enemy: new THREE.MeshStandardMaterial({
+        color: "#e65353",
+        roughness: 0.8
     })
 };
 
-// ТЕРРЕН
+/* ---------- ЗЕМЛЯ С НЕБОЛЬШИМИ ХОЛМАМИ ---------- */
 
 function terrainHeight(x, z) {
     return (
-        Math.sin(x * 0.055) * 1.5 +
-        Math.cos(z * 0.065) * 1.1 +
-        Math.sin((x + z) * 0.035) * 1.3
+        Math.sin(x * 0.045) * 0.8 +
+        Math.cos(z * 0.052) * 0.7 +
+        Math.sin((x + z) * 0.025) * 1.1
     );
 }
 
@@ -153,1093 +145,1080 @@ function createTerrain() {
     const geometry = new THREE.PlaneGeometry(
         WORLD.width,
         WORLD.depth,
-        120,
-        90
+        100,
+        80
     );
 
     geometry.rotateX(-Math.PI / 2);
 
     const positions = geometry.attributes.position;
-    const colors = [];
-
-    const colorA = new THREE.Color("#7fa85d");
-    const colorB = new THREE.Color("#6e994f");
-    const colorC = new THREE.Color("#90b56b");
 
     for (let i = 0; i < positions.count; i++) {
-        const x = positions.getX(i) + WORLD.width / 2;
-        const z = positions.getZ(i) + WORLD.depth / 2;
+        const x = positions.getX(i);
+        const z = positions.getZ(i);
 
-        positions.setX(i, x);
-        positions.setZ(i, z);
         positions.setY(i, terrainHeight(x, z));
-
-        const variation =
-            Math.sin(x * 0.08) * Math.cos(z * 0.07);
-
-        let color = colorA;
-
-        if (variation < -0.25) {
-            color = colorB;
-        } else if (variation > 0.45) {
-            color = colorC;
-        }
-
-        colors.push(color.r, color.g, color.b);
     }
-
-    geometry.setAttribute(
-        "color",
-        new THREE.Float32BufferAttribute(colors, 3)
-    );
 
     geometry.computeVertexNormals();
 
-    const material = new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness: 1
-    });
+    const ground = new THREE.Mesh(
+        geometry,
+        materials.grass
+    );
 
-    const ground = new THREE.Mesh(geometry, material);
-    ground.position.set(0, 0, 0);
-    ground.frustumCulled = false;
+    ground.position.set(
+        WORLD.width / 2,
+        0,
+        WORLD.depth / 2
+    );
+
     scene.add(ground);
 }
 
 createTerrain();
 
-// ДЕКОРАТИВНЫЕ ДЕТАЛИ
+/* ---------- ДЕРЕВЬЯ ---------- */
 
-function seededRandom(seed) {
-    let value = seed >>> 0;
-
-    return function () {
-        value = (value * 1664525 + 1013904223) >>> 0;
-        return value / 4294967296;
-    };
-}
-
-const random = seededRandom(43129);
-
-function makeMaterial(color, roughness = 1) {
-    return new THREE.MeshStandardMaterial({
-        color,
-        roughness
-    });
-}
-
-const trunkGeometry = new THREE.CylinderGeometry(
-    0.35,
-    0.52,
-    3.1,
-    7
-);
-
-const canopyGeometry = new THREE.IcosahedronGeometry(1, 1);
-const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
-const coverGeometry = new THREE.BoxGeometry(4.2, 2.1, 1.2);
-
-const treeMaterials = [
-    makeMaterial("#397749"),
-    makeMaterial("#46864b"),
-    makeMaterial("#527f42"),
-    makeMaterial("#356b40")
-];
-
-function addCollider(x, z, radius) {
-    obstacleColliders.push({ x, z, radius });
-}
-
-function createTree(x, z, radius, shade) {
+function createTree(x, z, scale = 1) {
     const group = new THREE.Group();
 
     const trunk = new THREE.Mesh(
-        trunkGeometry,
-        materials.treeTrunk
+        new THREE.CylinderGeometry(
+            0.22 * scale,
+            0.34 * scale,
+            2.1 * scale,
+            7
+        ),
+        materials.tree
     );
 
-    trunk.position.y = 1.4;
+    trunk.position.y = 1.05 * scale;
     group.add(trunk);
 
-    const canopyMaterial = treeMaterials[
-        Math.floor(shade * treeMaterials.length)
-    ];
-
-    const canopy1 = new THREE.Mesh(
-        canopyGeometry,
-        canopyMaterial
+    const crown = new THREE.Mesh(
+        new THREE.ConeGeometry(
+            1.35 * scale,
+            3.1 * scale,
+            7
+        ),
+        materials.leaves
     );
 
-    canopy1.position.set(0, 3.2, 0);
-    canopy1.scale.set(radius * 1.05, radius * 1.1, radius * 1.05);
-    group.add(canopy1);
-
-    const canopy2 = new THREE.Mesh(
-        canopyGeometry,
-        canopyMaterial
-    );
-
-    canopy2.position.set(
-        radius * 0.55,
-        3.1 + radius * 0.3,
-        radius * 0.2
-    );
-
-    canopy2.scale.setScalar(radius * 0.7);
-    group.add(canopy2);
+    crown.position.y = 3.1 * scale;
+    group.add(crown);
 
     group.position.set(x, terrainHeight(x, z), z);
     scene.add(group);
-
-    addCollider(x, z, radius * 0.72);
-}
-
-function createRock(x, z, radius) {
-    const rock = new THREE.Mesh(
-        rockGeometry,
-        materials.rock
-    );
-
-    rock.position.set(
-        x,
-        terrainHeight(x, z) + radius * 0.35,
-        z
-    );
-
-    rock.scale.set(
-        radius,
-        radius * 0.72,
-        radius * 0.85
-    );
-
-    rock.rotation.set(
-        random() * 0.3,
-        random() * Math.PI,
-        random() * 0.25
-    );
-
-    scene.add(rock);
-    addCollider(x, z, radius * 0.8);
-}
-
-function createCover(x, z, angle) {
-    const group = new THREE.Group();
-
-    const box = new THREE.Mesh(
-        coverGeometry,
-        materials.cover
-    );
-
-    box.position.y = 1.05;
-    group.add(box);
-
-    const top = new THREE.Mesh(
-        new THREE.BoxGeometry(4.35, 0.15, 1.3),
-        makeMaterial("#b29a70")
-    );
-
-    top.position.y = 2.15;
-    group.add(top);
-
-    group.position.set(x, terrainHeight(x, z), z);
-    group.rotation.y = angle;
-
-    scene.add(group);
-    addCollider(x, z, 2.2);
 }
 
 function createNature() {
-    for (let i = 0; i < 145; i++) {
-        const x = 5 + random() * (WORLD.width - 10);
-        const z = 5 + random() * (WORLD.depth - 10);
+    for (let i = 0; i < 190; i++) {
+        const x = 4 + Math.random() * (WORLD.width - 8);
+        const z = 4 + Math.random() * (WORLD.depth - 8);
 
-        createTree(x, z, 1.6 + random() * 1.1, random());
+        if (
+            Math.abs(x - WORLD.width / 2) < 13 &&
+            Math.abs(z - WORLD.depth / 2) < 13
+        ) {
+            continue;
+        }
+
+        createTree(
+            x,
+            z,
+            0.7 + Math.random() * 0.8
+        );
     }
 
-    for (let i = 0; i < 48; i++) {
-        const x = 5 + random() * (WORLD.width - 10);
-        const z = 5 + random() * (WORLD.depth - 10);
+    for (let i = 0; i < 55; i++) {
+        const x = 5 + Math.random() * (WORLD.width - 10);
+        const z = 5 + Math.random() * (WORLD.depth - 10);
 
-        createRock(x, z, 0.8 + random() * 0.6);
-    }
+        const rock = new THREE.Mesh(
+            new THREE.DodecahedronGeometry(
+                0.6 + Math.random() * 1.2,
+                0
+            ),
+            materials.rock
+        );
 
-    for (let i = 0; i < 12; i++) {
-        const x = 25 + random() * (WORLD.width - 50);
-        const z = 25 + random() * (WORLD.depth - 50);
+        rock.position.set(
+            x,
+            terrainHeight(x, z) + 0.4,
+            z
+        );
 
-        createCover(x, z, random() * Math.PI);
+        rock.rotation.set(
+            Math.random(),
+            Math.random() * Math.PI,
+            Math.random()
+        );
+
+        scene.add(rock);
     }
 }
 
 createNature();
 
-// ВОДА И ГРАНИЦА
-
-function createPond() {
-    const water = new THREE.Mesh(
-        new THREE.CircleGeometry(12, 32),
-        materials.water
-    );
-
-    water.rotation.x = -Math.PI / 2;
-    water.scale.set(1.4, 0.8, 1);
-    water.position.set(
-        181,
-        terrainHeight(181, 35) + 0.1,
-        35
-    );
-
-    scene.add(water);
-}
-
-createPond();
-
-function createBoundaryPost(x, z) {
-    const post = new THREE.Mesh(
-        new THREE.BoxGeometry(0.35, 1.1, 0.35),
-        materials.boundary
-    );
-
-    post.position.set(
-        x,
-        terrainHeight(x, z) + 0.55,
-        z
-    );
-
-    scene.add(post);
-}
+/* ---------- ГРАНИЦЫ КАРТЫ ---------- */
 
 function createBoundary() {
-    for (let x = 0; x <= WORLD.width; x += 4) {
-        createBoundaryPost(x, 0);
-        createBoundaryPost(x, WORLD.depth);
-    }
+    const material = new THREE.MeshBasicMaterial({
+        color: "#d7efff",
+        transparent: true,
+        opacity: 0.35
+    });
 
-    for (let z = 4; z < WORLD.depth; z += 4) {
-        createBoundaryPost(0, z);
-        createBoundaryPost(WORLD.width, z);
+    const height = 5;
+    const thickness = 0.4;
+
+    const walls = [
+        {
+            x: WORLD.width / 2,
+            z: 0,
+            sx: WORLD.width,
+            sz: thickness
+        },
+        {
+            x: WORLD.width / 2,
+            z: WORLD.depth,
+            sx: WORLD.width,
+            sz: thickness
+        },
+        {
+            x: 0,
+            z: WORLD.depth / 2,
+            sx: thickness,
+            sz: WORLD.depth
+        },
+        {
+            x: WORLD.width,
+            z: WORLD.depth / 2,
+            sx: thickness,
+            sz: WORLD.depth
+        }
+    ];
+
+    for (const wall of walls) {
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(
+                wall.sx,
+                height,
+                wall.sz
+            ),
+            material
+        );
+
+        mesh.position.set(
+            wall.x,
+            height / 2,
+            wall.z
+        );
+
+        scene.add(mesh);
     }
 }
 
 createBoundary();
 
-// РУКИ И ОРУЖИЕ
+/* ---------- МОДЕЛЬ ИГРОКА ---------- */
 
-const hands = new THREE.Group();
-camera.add(hands);
-
-const armMaterial = makeMaterial("#b87953");
-const sleeveMaterial = makeMaterial("#4d7d53");
-const weaponMaterial = makeMaterial("#c6d5d7", 0.45);
-
-function createArm(x, y, z, rotationZ) {
-    const arm = new THREE.Group();
-
-    const sleeve = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.12, 0.17, 0.55, 8),
-        sleeveMaterial
-    );
-
-    sleeve.rotation.z = rotationZ;
-    sleeve.position.y = -0.12;
-    arm.add(sleeve);
-
-    const hand = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 8, 8),
-        armMaterial
-    );
-
-    hand.position.y = -0.4;
-    arm.add(hand);
-
-    arm.position.set(x, y, z);
-    hands.add(arm);
-
-    return arm;
-}
-
-const leftArm = createArm(-0.34, -0.38, -0.65, -0.45);
-const rightArm = createArm(0.35, -0.37, -0.68, 0.45);
-
-const sword = new THREE.Group();
-
-const swordBlade = new THREE.Mesh(
-    new THREE.BoxGeometry(0.09, 0.62, 0.055),
-    weaponMaterial
-);
-
-swordBlade.position.y = 0.32;
-sword.add(swordBlade);
-
-const swordHandle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.045, 0.045, 0.2, 8),
-    makeMaterial("#69452e")
-);
-
-swordHandle.position.y = -0.09;
-sword.add(swordHandle);
-
-sword.position.set(0.04, -0.12, -0.08);
-sword.rotation.z = -0.22;
-rightArm.add(sword);
-
-const magicOrb = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.13, 1),
-    new THREE.MeshBasicMaterial({ color: "#c69aff" })
-);
-
-magicOrb.position.set(0, -0.08, -0.35);
-leftArm.add(magicOrb);
-
-// МОДЕЛИ ДРУГИХ ИГРОКОВ
-
-function createRemotePlayer(player) {
+function createPlayerModel(isMe = false) {
     const group = new THREE.Group();
 
-    const color = new THREE.Color(player.color || "#6dd7ff");
-
     const body = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.48, 0.8, 3, 7),
-        new THREE.MeshStandardMaterial({
-            color,
-            roughness: 0.8
-        })
+        new THREE.CapsuleGeometry(0.42, 0.85, 4, 8),
+        isMe ? materials.player : materials.enemy
     );
 
-    body.position.y = 0.9;
+    body.position.y = 1.0;
     group.add(body);
 
     const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.31, 10, 8),
-        makeMaterial("#e6bd96")
-    );
-
-    head.position.y = 1.75;
-    group.add(head);
-
-    const helmet = new THREE.Mesh(
-        new THREE.SphereGeometry(
-            0.34, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.6
-        ),
-        makeMaterial("#425b42")
-    );
-
-    helmet.position.y = 1.86;
-    group.add(helmet);
-
-    const weapon = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.9, 0.12),
-        weaponMaterial
-    );
-
-    weapon.position.set(0.52, 1.0, -0.1);
-    weapon.rotation.x = 0.15;
-    group.add(weapon);
-
-    const labelCanvas = document.createElement("canvas");
-    labelCanvas.width = 256;
-    labelCanvas.height = 64;
-
-    const ctx = labelCanvas.getContext("2d");
-    ctx.fillStyle = "#14251de8";
-    ctx.fillRect(0, 0, 256, 64);
-    ctx.font = "bold 28px Arial";
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "center";
-    ctx.fillText(player.name || "Игрок", 128, 40);
-
-    const label = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-            map: new THREE.CanvasTexture(labelCanvas),
-            transparent: true,
-            depthTest: false
+        new THREE.SphereGeometry(0.29, 12, 10),
+        new THREE.MeshStandardMaterial({
+            color: "#edc5a0"
         })
     );
 
-    label.position.y = 2.55;
-    label.scale.set(3, 0.75, 1);
-    group.add(label);
+    head.position.y = 1.8;
+    group.add(head);
 
-    group.userData.label = label;
+    const direction = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.13, 0.7),
+        new THREE.MeshStandardMaterial({
+            color: "#303b4c"
+        })
+    );
+
+    direction.position.set(0, 1.2, -0.48);
+    group.add(direction);
 
     scene.add(group);
     return group;
 }
 
-// СНАРЯДЫ
+/* ---------- СНАРЯДЫ ---------- */
 
 function createProjectile() {
     const group = new THREE.Group();
 
     const orb = new THREE.Mesh(
         new THREE.IcosahedronGeometry(0.32, 1),
-        new THREE.MeshBasicMaterial({ color: "#c59aff" })
+        new THREE.MeshBasicMaterial({
+            color: "#c59aff"
+        })
     );
 
     group.add(orb);
 
-    group.add(new THREE.PointLight("#b78aff", 1.5, 5));
+    group.add(
+        new THREE.PointLight("#b78aff", 1.5, 5)
+    );
 
     scene.add(group);
     return group;
+    }
+    /* ---------- МОБИЛЬНЫЙ ИНТЕРФЕЙС ---------- */
+
+const uiStyle = document.createElement("style");
+
+uiStyle.textContent = `
+    #gameUI {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        color: white;
+        font-family: Arial, sans-serif;
+        pointer-events: none;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    #gameUI * {
+        box-sizing: border-box;
+    }
+
+    .gamePanel {
+        background: rgba(15, 22, 32, .84);
+        border: 1px solid rgba(255,255,255,.15);
+        border-radius: 13px;
+        padding: 12px;
+        backdrop-filter: blur(8px);
+    }
+
+    .gameButton {
+        border: 1px solid #ffffff35;
+        background: #26374b;
+        color: white;
+        padding: 11px 15px;
+        border-radius: 10px;
+        font-weight: bold;
+        font-size: 14px;
+        touch-action: none;
+    }
+
+    .gameButton:active {
+        background: #496da0;
+    }
+
+    #gameTop {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+    }
+
+    #gameStats {
+        min-width: 145px;
+        font-size: 13px;
+        line-height: 1.7;
+    }
+
+    #healthTrack {
+        width: 145px;
+        height: 9px;
+        background: #482c34;
+        border-radius: 9px;
+        overflow: hidden;
+    }
+
+    #healthBar {
+        height: 100%;
+        width: 100%;
+        background: #50dc83;
+        transition: width .15s;
+    }
+
+    #gameBottom {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+    }
+
+    #joystick {
+        position: absolute;
+        left: 22px;
+        bottom: 25px;
+        width: 124px;
+        height: 124px;
+        border-radius: 50%;
+        background: #ffffff20;
+        border: 2px solid #ffffff55;
+        pointer-events: auto;
+        touch-action: none;
+    }
+
+    #joystickStick {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 52px;
+        height: 52px;
+        margin-left: -26px;
+        margin-top: -26px;
+        border-radius: 50%;
+        background: #dceaffb8;
+        border: 2px solid white;
+        pointer-events: none;
+    }
+
+    #lookZone {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 62%;
+        height: 75%;
+        pointer-events: auto;
+        touch-action: none;
+        background: transparent;
+    }
+
+    #attackButton {
+        position: absolute;
+        right: 25px;
+        bottom: 35px;
+        width: 78px;
+        height: 78px;
+        border-radius: 50%;
+        background: #7044a8e8;
+        border: 2px solid #d9c0ff;
+        color: white;
+        font-size: 15px;
+        font-weight: bold;
+        pointer-events: auto;
+        touch-action: none;
+    }
+
+    #shopButton {
+        position: absolute;
+        right: 20px;
+        top: 12px;
+        pointer-events: auto;
+    }
+
+    #statusMessage {
+        position: absolute;
+        left: 50%;
+        top: 23%;
+        transform: translateX(-50%);
+        padding: 10px 15px;
+        border-radius: 10px;
+        background: #101722d9;
+        font-size: 13px;
+        text-align: center;
+        max-width: 85%;
+    }
+
+    #gameMenu {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #101722d9;
+        pointer-events: auto;
+        padding: 20px;
+    }
+
+    #gameMenuCard {
+        width: min(360px, 100%);
+        text-align: center;
+    }
+
+    #gameMenuCard h1 {
+        font-size: 29px;
+        margin: 5px 0 12px;
+    }
+
+    #gameMenuCard p {
+        color: #c5d0df;
+        line-height: 1.5;
+        font-size: 14px;
+    }
+
+    #shopPanel {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: min(330px, calc(100% - 30px));
+        display: none;
+        pointer-events: auto;
+    }
+
+    #shopPanel h2 {
+        margin-top: 0;
+    }
+
+    .shopRow {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin: 12px 0;
+    }
+
+    #connectionStatus {
+        color: #ffda8a;
+        font-size: 12px;
+    }
+
+    @media (min-width: 800px) {
+        #joystick {
+            width: 145px;
+            height: 145px;
+        }
+
+        #lookZone {
+            width: 65%;
+            height: 85%;
+        }
+    }
+`;
+
+document.head.appendChild(uiStyle);
+
+const ui = document.createElement("div");
+ui.id = "gameUI";
+
+ui.innerHTML = `
+    <div id="gameTop">
+        <div class="gamePanel" id="gameStats">
+            <div><b>Уровень:</b> <span id="levelText">1</span></div>
+            <div><b>Монеты:</b> <span id="coinsText">0</span></div>
+            <div><b>Опыт:</b> <span id="xpText">0</span></div>
+            <div id="healthTrack">
+                <div id="healthBar"></div>
+            </div>
+            <div id="healthText">100 / 100 HP</div>
+        </div>
+        <div id="connectionStatus">Подключение...</div>
+    </div>
+
+    <button class="gameButton" id="shopButton">МАГАЗИН</button>
+
+    <div id="lookZone"></div>
+
+    <div id="gameBottom">
+        <div id="joystick">
+            <div id="joystickStick"></div>
+        </div>
+        <button id="attackButton">АТАКА</button>
+    </div>
+
+    <div id="statusMessage">Загрузка мира...</div>
+
+    <div id="shopPanel" class="gamePanel">
+        <h2>Магазин</h2>
+        <div>Монеты: <b id="shopCoins">0</b></div>
+
+        <div class="shopRow">
+            <span>Урон +5 · 30 монет</span>
+            <button class="gameButton" id="buyDamage">Купить</button>
+        </div>
+
+        <div class="shopRow">
+            <span>Здоровье +25 · 25 монет</span>
+            <button class="gameButton" id="buyHealth">Купить</button>
+        </div>
+
+        <div class="shopRow">
+            <span>Скорость +1 · 40 монет</span>
+            <button class="gameButton" id="buySpeed">Купить</button>
+        </div>
+
+        <button class="gameButton" id="closeShop">Закрыть</button>
+    </div>
+
+    <div id="gameMenu">
+        <div class="gamePanel" id="gameMenuCard">
+            <h1>WILD ARENA 3D</h1>
+            <p>
+                Исследуй большую карту, сражайся с игроками,
+                получай опыт и улучшай персонажа.
+            </p>
+            <p id="menuConnection">Подключаемся к серверу...</p>
+            <button class="gameButton" id="playButton" disabled>
+                ИГРАТЬ
+            </button>
+        </div>
+    </div>
+`;
+
+document.body.appendChild(ui);
+
+const $ = id => document.getElementById(id);
+
+function showMessage(text) {
+    $("statusMessage").textContent = text;
+    $("statusMessage").style.display = "block";
+
+    clearTimeout(showMessage.timer);
+
+    showMessage.timer = setTimeout(() => {
+        $("statusMessage").style.display = "none";
+    }, 2400);
 }
 
-/* ПРОДОЛЖЕНИЕ game.js — вставить сразу после части 1 */
+/* ---------- WEBSOCKET ---------- */
 
-// ПОДКЛЮЧЕНИЕ К МУЛЬТИПЛЕЕРУ
+function getSocketURL() {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    return protocol + "//" + location.host;
+}
+
+function sendMessage(data) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    socket.send(JSON.stringify(data));
+}
 
 function connect() {
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    if (!location.host) {
+        $("connectionStatus").textContent = "Нет адреса сервера";
+        $("menuConnection").textContent =
+            "Открой игру через работающий сервер.";
+        return;
+    }
 
-    socket = new WebSocket(protocol + "//" + location.host);
+    try {
+        socket = new WebSocket(getSocketURL());
+    } catch (error) {
+        $("connectionStatus").textContent = "Ошибка подключения";
+        return;
+    }
 
     socket.addEventListener("open", () => {
         connected = true;
-        playButton.disabled = false;
-        playButton.textContent = "ВОЙТИ В МИР";
-        connectionText.textContent = "Сервер доступен.";
+
+        $("connectionStatus").textContent = "На связи";
+        $("menuConnection").textContent = "Сервер подключён";
+        $("playButton").disabled = false;
+
+        $("playButton").textContent = "ИГРАТЬ";
     });
 
-    socket.addEventListener("message", (event) => {
-        let data;
+    socket.addEventListener("message", event => {
+        let message;
 
         try {
-            data = JSON.parse(event.data);
-        } catch {
+            message = JSON.parse(event.data);
+        } catch (error) {
             return;
         }
 
-        if (data.type === "welcome") {
-            myId = data.id;
-
-            if (joined) {
-                sendJoin();
-            }
-        }
-
-        if (data.type === "state") {
-            players = data.players || [];
-            projectiles = data.projectiles || [];
-        }
-
-        if (data.type === "message") {
-            showToast(data.text);
-        }
-
-        if (data.type === "error") {
-            showToast(data.message || "Не удалось выполнить действие");
-        }
+        handleServerMessage(message);
     });
 
     socket.addEventListener("close", () => {
         connected = false;
-        playButton.disabled = true;
-        playButton.textContent = "НЕТ СОЕДИНЕНИЯ";
-        connectionText.textContent =
-            "Связь потеряна. Перезагрузи страницу.";
-        gameStatus.textContent = "Нет соединения с сервером";
+        joined = false;
+
+        $("connectionStatus").textContent = "Нет соединения";
+        $("menuConnection").textContent = "Соединение потеряно";
+
+        $("playButton").disabled = true;
+
+        showMessage("Соединение с сервером потеряно");
     });
 
     socket.addEventListener("error", () => {
-        connectionText.textContent =
-            "Не удалось подключиться к серверу.";
+        $("connectionStatus").textContent = "Ошибка сервера";
     });
 }
 
-function send(data) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(data));
-    }
-}
+function handleServerMessage(message) {
+    if (message.type === "welcome") {
+        myId = message.id;
 
-function sendJoin() {
-    if (!connected || !joined) {
+        if (message.player) {
+            Object.assign(playerData, message.player);
+        }
+
+        joined = true;
+
+        $("gameMenu").style.display = "none";
+
+        showMessage("Добро пожаловать на арену!");
+
         return;
     }
 
-    send({
-        type: "join",
-        name: nameInput.value.trim().slice(0, 16) || "Игрок"
-    });
-}
+    if (message.type === "state") {
+        const statePlayers = message.players || [];
 
-connect();
+        players = Array.isArray(statePlayers)
+            ? statePlayers
+            : Object.values(statePlayers);
 
-// МЕНЮ И ЛОББИ
+        projectiles = message.projectiles || [];
 
-function showScreen(screen) {
-    menuScreen.classList.add("hidden");
-    lobbyScreen.classList.add("hidden");
-    shopScreen.classList.add("hidden");
+        const me = players.find(
+            player => player.id === myId
+        );
 
-    if (screen) {
-        screen.classList.remove("hidden");
+        if (me) {
+            Object.assign(playerData, me);
+        }
+
+        if (message.coins !== undefined) {
+            playerData.coins = message.coins;
+        }
+
+        updateHUD();
+        return;
     }
 
-    document.exitPointerLock?.();
+    if (message.type === "hit") {
+        showMessage("Попадание!");
+        return;
+    }
+
+    if (message.type === "levelUp") {
+        showMessage("Новый уровень!");
+        return;
+    }
+
+    if (message.type === "error") {
+        showMessage(message.message || "Ошибка");
+    }
 }
 
-function enterWorld() {
+/* ---------- ИГРА И МАГАЗИН ---------- */
+
+$("playButton").addEventListener("click", () => {
     if (!connected) {
-        connectionText.textContent = "Сервер пока недоступен.";
+        showMessage("Ждём подключения к серверу");
         return;
     }
 
-    joined = true;
-    sendJoin();
-
-    showScreen(null);
-
-    gameStatus.textContent = "Ты в открытом мире";
-
-    if (window.matchMedia("(pointer: fine)").matches) {
-        renderer.domElement.requestPointerLock?.();
-    }
-}
-
-playButton.addEventListener("click", enterWorld);
-
-document.getElementById("lobbyButton").addEventListener("click", () => {
-    updateHUD();
-    showScreen(lobbyScreen);
-});
-
-document.getElementById("menuButton").addEventListener("click", () => {
-    updateHUD();
-    showScreen(lobbyScreen);
-});
-
-document.getElementById("shopButton").addEventListener("click", () => {
-    updateHUD();
-    showScreen(shopScreen);
-});
-
-document.getElementById("returnButton").addEventListener("click", () => {
-    if (!joined) {
-        enterWorld();
-        return;
-    }
-
-    showScreen(null);
-});
-
-document.getElementById("shopReturnButton").addEventListener("click", () => {
-    showScreen(null);
-});
-
-document.getElementById("exitButton").addEventListener("click", () => {
-    showScreen(menuScreen);
-});
-
-document.querySelectorAll("[data-close]").forEach((button) => {
-    button.addEventListener("click", () => {
-        showScreen(lobbyScreen);
+    sendMessage({
+        type: "join"
     });
 });
 
-document.addEventListener("keydown", (event) => {
-    if (
-        event.key === "Escape" &&
-        menuScreen.classList.contains("hidden") &&
-        lobbyScreen.classList.contains("hidden") &&
-        shopScreen.classList.contains("hidden")
-    ) {
-        showScreen(lobbyScreen);
-    }
+$("shopButton").addEventListener("click", () => {
+    $("shopPanel").style.display = "block";
 });
 
-// МАГАЗИН
+$("closeShop").addEventListener("click", () => {
+    $("shopPanel").style.display = "none";
+});
 
-document.querySelectorAll("[data-buy]").forEach((button) => {
-    button.addEventListener("click", () => {
-        send({
-            type: "buy",
-            upgrade: button.dataset.buy
-        });
-
-        document.getElementById("shopMessage").textContent =
-            "Покупка отправлена серверу...";
+$("buyDamage").addEventListener("click", () => {
+    sendMessage({
+        type: "buy",
+        item: "damage"
     });
 });
 
-function updateShopPrices(me) {
-    const damagePrice = 50 + (me.damage - 20) * 5;
-    const healthPrice = 60 + (me.maxHp - 100) * 2;
-    const speedPrice = 70 + (me.speed - 10) * 15;
-
-    document.getElementById("damagePrice").textContent =
-        me.damage >= 60 ? "МАКСИМУМ" : damagePrice + " ✦";
-
-    document.getElementById("healthPrice").textContent =
-        me.maxHp >= 250 ? "МАКСИМУМ" : healthPrice + " ✦";
-
-    document.getElementById("speedPrice").textContent =
-        me.speed >= 17 ? "МАКСИМУМ" : speedPrice + " ✦";
-
-    document.getElementById("healPrice").textContent = "25 ✦";
-
-    document.querySelectorAll("[data-buy]").forEach((button) => {
-        const upgrade = button.dataset.buy;
-
-        const maxed =
-            (upgrade === "damage" && me.damage >= 60) ||
-            (upgrade === "health" && me.maxHp >= 250) ||
-            (upgrade === "speed" && me.speed >= 17);
-
-        button.disabled = maxed;
-        button.textContent = maxed ? "Макс." : "Купить";
+$("buyHealth").addEventListener("click", () => {
+    sendMessage({
+        type: "buy",
+        item: "health"
     });
-}
+});
 
-// HUD
-
-function showToast(message) {
-    const toast = document.getElementById("toast");
-
-    toast.textContent = message;
-    toast.classList.add("visible");
-
-    clearTimeout(toastTimer);
-
-    toastTimer = setTimeout(() => {
-        toast.classList.remove("visible");
-    }, 1800);
-}
-
-let previousLevel = 1;
-let previousCoins = 50;
+$("buySpeed").addEventListener("click", () => {
+    sendMessage({
+        type: "buy",
+        item: "speed"
+    });
+});
 
 function updateHUD() {
-    const me = players.find((player) => player.id === myId);
+    $("levelText").textContent = playerData.level ?? 1;
+    $("coinsText").textContent = playerData.coins ?? 0;
+    $("xpText").textContent = playerData.xp ?? 0;
+    $("shopCoins").textContent = playerData.coins ?? 0;
 
-    if (!me) {
-        return;
-    }
+    const hp = Math.max(0, playerData.hp ?? 100);
+    const maxHp = Math.max(1, playerData.maxHp ?? 100);
 
-    coinsElement.textContent = me.coins;
-    levelElement.textContent = me.level;
+    $("healthText").textContent =
+        Math.round(hp) + " / " + Math.round(maxHp) + " HP";
 
-    healthText.textContent = `${me.hp} / ${me.maxHp}`;
-
-    healthFill.style.width =
-        Math.max(0, me.hp / me.maxHp * 100) + "%";
-
-    xpText.textContent = `${me.xp} / ${me.nextXp}`;
-
-    xpFill.style.width =
-        Math.max(0, me.xp / me.nextXp * 100) + "%";
-
-    document.getElementById("lobbyLevel").textContent = me.level;
-    document.getElementById("lobbyCoins").textContent = me.coins;
-    document.getElementById("lobbyDamage").textContent = me.damage;
-    document.getElementById("shopCoins").textContent = me.coins;
-
-    if (me.level > previousLevel) {
-        showToast("Новый уровень! Уровень " + me.level);
-    }
-
-    if (me.coins > previousCoins) {
-        showToast("Получены монеты!");
-    }
-
-    previousLevel = me.level;
-    previousCoins = me.coins;
-
-    if (me.hp <= 0) {
-        gameStatus.textContent = "Ты выбыл! Скоро возродишься...";
-    } else if (me.hp < 35) {
-        gameStatus.textContent = "Мало здоровья — будь осторожен!";
-    } else {
-        gameStatus.textContent = "Игроков в мире: " + players.length;
-    }
-
-    updateShopPrices(me);
+    $("healthBar").style.width =
+        Math.min(100, hp / maxHp * 100) + "%";
 }
 
-// УПРАВЛЕНИЕ
+/* ---------- ДЖОЙСТИК ---------- */
 
-const keyState = new Set();
+const joystick = $("joystick");
+const joystickStick = $("joystickStick");
 
-function updateKeyboardInput() {
-    if (joystickState.active) {
-        return;
-    }
+let joystickPointer = null;
+let joystickCenter = null;
 
-    let forward = 0;
-    let side = 0;
+function resetJoystick() {
+    joystickPointer = null;
+    moveX = 0;
+    moveY = 0;
 
-    if (keyState.has("w") || keyState.has("arrowup")) forward += 1;
-    if (keyState.has("s") || keyState.has("arrowdown")) forward -= 1;
-    if (keyState.has("a") || keyState.has("arrowleft")) side -= 1;
-    if (keyState.has("d") || keyState.has("arrowright")) side += 1;
-
-    input.forward = forward;
-    input.side = side;
+    joystickStick.style.transform = "translate(0px, 0px)";
 }
 
-document.addEventListener("keydown", (event) => {
-    if (document.activeElement?.tagName === "INPUT") {
-        return;
-    }
-
-    const key = event.key.toLowerCase();
-
-    if ([
-        "w", "a", "s", "d",
-        "arrowup", "arrowdown", "arrowleft", "arrowright"
-    ].includes(key)) {
-        event.preventDefault();
-        keyState.add(key);
-        updateKeyboardInput();
-    }
-
-    if (event.repeat) {
-        return;
-    }
-
-    if (key === "j") attack("melee");
-    if (key === "k") attack("magic");
-});
-
-document.addEventListener("keyup", (event) => {
-    keyState.delete(event.key.toLowerCase());
-    updateKeyboardInput();
-});
-
-window.addEventListener("blur", () => {
-    keyState.clear();
-    input.forward = 0;
-    input.side = 0;
-    sendInput();
-});
-
-function attack(attackType) {
-    if (!joined || !connected) {
-        return;
-    }
-
-    send({
-        type: "attack",
-        attackType
-    });
-
-    if (attackType === "melee") {
-        sword.rotation.z = -0.9;
-
-        setTimeout(() => {
-            sword.rotation.z = -0.22;
-        }, 140);
-    } else {
-        magicOrb.visible = true;
-
-        setTimeout(() => {
-            magicOrb.visible = false;
-        }, 180);
-    }
-}
-
-document.getElementById("meleeButton").addEventListener("pointerdown", (event) => {
+joystick.addEventListener("pointerdown", event => {
     event.preventDefault();
-    attack("melee");
-});
 
-document.getElementById("magicButton").addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    attack("magic");
-});
+    joystickPointer = event.pointerId;
+    joystick.setPointerCapture(event.pointerId);
 
-// СЕНСОРНЫЙ ДЖОЙСТИК
-
-function updateJoystick(event) {
     const rect = joystick.getBoundingClientRect();
 
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    joystickCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        max: rect.width * 0.34
+    };
 
-    let dx = event.clientX - centerX;
-    let dy = event.clientY - centerY;
+    updateJoystick(event);
+});
+
+function updateJoystick(event) {
+    if (event.pointerId !== joystickPointer) {
+        return;
+    }
+
+    let dx = event.clientX - joystickCenter.x;
+    let dy = event.clientY - joystickCenter.y;
 
     const distance = Math.hypot(dx, dy);
-    const max = joystickState.maxDistance;
+    const max = joystickCenter.max;
 
     if (distance > max) {
         dx = dx / distance * max;
         dy = dy / distance * max;
     }
 
-    joystickState.x = dx / max;
-    joystickState.y = dy / max;
+    moveX = dx / max;
 
-    joystickKnob.style.left = `calc(50% + ${dx}px)`;
-    joystickKnob.style.top = `calc(50% + ${dy}px)`;
+    // Вверх по экрану означает движение вперёд.
+    moveY = dy / max;
 
-    input.forward = -joystickState.y;
-    input.side = joystickState.x;
+    joystickStick.style.transform =
+        `translate(${dx}px, ${dy}px)`;
 }
 
-function resetJoystick() {
-    joystickState.active = false;
-    joystickState.pointerId = null;
-    joystickState.x = 0;
-    joystickState.y = 0;
+joystick.addEventListener("pointermove", updateJoystick);
 
-    input.forward = 0;
-    input.side = 0;
-
-    joystickKnob.style.left = "50%";
-    joystickKnob.style.top = "50%";
-
-    sendInput();
-}
-
-joystick.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-
-    joystickState.active = true;
-    joystickState.pointerId = event.pointerId;
-
-    joystick.setPointerCapture(event.pointerId);
-    updateJoystick(event);
-});
-
-joystick.addEventListener("pointermove", (event) => {
-    if (
-        !joystickState.active ||
-        event.pointerId !== joystickState.pointerId
-    ) {
-        return;
-    }
-
-    event.preventDefault();
-    updateJoystick(event);
-});
-
-joystick.addEventListener("pointerup", (event) => {
-    if (event.pointerId === joystickState.pointerId) {
+joystick.addEventListener("pointerup", event => {
+    if (event.pointerId === joystickPointer) {
         resetJoystick();
     }
 });
 
 joystick.addEventListener("pointercancel", resetJoystick);
 
-// ОБЗОР КАМЕРЫ
-
-renderer.domElement.addEventListener("click", () => {
-    if (
-        joined &&
-        window.matchMedia("(pointer: fine)").matches &&
-        document.pointerLockElement !== renderer.domElement &&
-        menuScreen.classList.contains("hidden") &&
-        lobbyScreen.classList.contains("hidden") &&
-        shopScreen.classList.contains("hidden")
-    ) {
-        renderer.domElement.requestPointerLock?.();
+joystick.addEventListener("lostpointercapture", () => {
+    if (joystickPointer !== null) {
+        resetJoystick();
     }
 });
 
-document.addEventListener("mousemove", (event) => {
-    if (document.pointerLockElement === renderer.domElement) {
-        cameraControl.yaw -= event.movementX * 0.0025;
-        cameraControl.pitch -= event.movementY * 0.0022;
+/* ---------- ПОВОРОТ КАМЕРЫ НА ANDROID ---------- */
 
-        cameraControl.pitch = THREE.MathUtils.clamp(
-            cameraControl.pitch,
-            -1.15,
-            1.15
-        );
-    }
-});
+const lookZone = $("lookZone");
 
-renderer.domElement.addEventListener("pointerdown", (event) => {
-    if (
-        event.pointerType === "mouse" ||
-        event.clientX < window.innerWidth * 0.42 ||
-        !menuScreen.classList.contains("hidden") ||
-        !lobbyScreen.classList.contains("hidden") ||
-        !shopScreen.classList.contains("hidden")
-    ) {
+let lookPointer = null;
+let lastLookX = 0;
+let lastLookY = 0;
+
+lookZone.addEventListener("pointerdown", event => {
+    if (lookPointer !== null) {
         return;
     }
 
-    pointerLook.active = true;
-    pointerLook.pointerId = event.pointerId;
-    pointerLook.x = event.clientX;
-    pointerLook.y = event.clientY;
-
-    renderer.domElement.setPointerCapture(event.pointerId);
-});
-
-renderer.domElement.addEventListener("pointermove", (event) => {
-    if (
-        !pointerLook.active ||
-        event.pointerId !== pointerLook.pointerId
-    ) {
+    // Не начинаем вращение при нажатии на интерфейс.
+    if (event.target.closest("button")) {
         return;
     }
 
-    const dx = event.clientX - pointerLook.x;
-    const dy = event.clientY - pointerLook.y;
+    event.preventDefault();
 
-    pointerLook.x = event.clientX;
-    pointerLook.y = event.clientY;
+    lookPointer = event.pointerId;
 
-    cameraControl.yaw -= dx * 0.006;
-    cameraControl.pitch -= dy * 0.004;
+    lastLookX = event.clientX;
+    lastLookY = event.clientY;
 
-    cameraControl.pitch = THREE.MathUtils.clamp(
-        cameraControl.pitch,
-        -1.15,
-        1.15
+    lookZone.setPointerCapture(event.pointerId);
+});
+
+lookZone.addEventListener("pointermove", event => {
+    if (event.pointerId !== lookPointer) {
+        return;
+    }
+
+    event.preventDefault();
+
+    const dx = event.clientX - lastLookX;
+    const dy = event.clientY - lastLookY;
+
+    lastLookX = event.clientX;
+    lastLookY = event.clientY;
+
+    // Повышенная чувствительность для сенсорного экрана.
+    cameraYaw -= dx * CONFIG.lookSensitivity;
+    cameraPitch += dy * CONFIG.verticalSensitivity;
+
+    cameraPitch = Math.max(
+        CONFIG.minPitch,
+        Math.min(CONFIG.maxPitch, cameraPitch)
     );
 });
 
-function stopPointerLook() {
-    pointerLook.active = false;
-    pointerLook.pointerId = null;
+function endLook(event) {
+    if (event.pointerId === lookPointer) {
+        lookPointer = null;
+    }
 }
 
-renderer.domElement.addEventListener("pointerup", stopPointerLook);
-renderer.domElement.addEventListener("pointercancel", stopPointerLook);
+lookZone.addEventListener("pointerup", endLook);
+lookZone.addEventListener("pointercancel", endLook);
 
-function sendInput() {
-    send({
-        type: "input",
-        forward: input.forward,
-        side: input.side,
-        yaw: cameraControl.yaw
+lookZone.addEventListener("lostpointercapture", () => {
+    lookPointer = null;
+});
+
+/* ---------- АТАКА ---------- */
+
+$("attackButton").addEventListener("pointerdown", event => {
+    event.preventDefault();
+
+    const now = performance.now();
+
+    if (now - lastAttack < CONFIG.attackCooldown) {
+        return;
+    }
+
+    lastAttack = now;
+
+    sendMessage({
+        type: "attack",
+        yaw: cameraYaw,
+        pitch: cameraPitch
     });
-}
+});
 
-// ОБНОВЛЕНИЕ ИГРОКОВ
+/* ---------- МОДЕЛИ ИГРОКОВ ---------- */
 
-function updatePlayers(dt) {
-    const currentIds = new Set();
+function updatePlayers() {
+    const activeIds = new Set();
 
     for (const player of players) {
         if (player.id === myId) {
             continue;
         }
 
-        currentIds.add(player.id);
+        activeIds.add(player.id);
 
         let model = remoteModels.get(player.id);
 
         if (!model) {
-            model = createRemotePlayer(player);
+            model = createPlayerModel(false);
             remoteModels.set(player.id, model);
         }
 
-        model.visible = player.alive;
+        const targetX = Number(player.x) || 0;
+        const targetY = Number(player.y) || 0;
+        const targetZ = Number(player.z) || 0;
 
-        if (!player.alive) {
-            continue;
-        }
-
-        model.position.lerp(
-            new THREE.Vector3(player.x, player.y, player.z),
-            Math.min(1, dt * 12)
+        model.position.set(
+            targetX,
+            targetY,
+            targetZ
         );
 
-        model.rotation.y = player.yaw;
+        model.rotation.y = Number(player.yaw) || 0;
     }
 
     for (const [id, model] of remoteModels) {
-        if (!currentIds.has(id)) {
+        if (!activeIds.has(id)) {
             scene.remove(model);
             remoteModels.delete(id);
         }
     }
+}
+
+function updateProjectiles() {
+    const activeIds = new Set();
 
     for (const projectile of projectiles) {
-        let model = projectileModels.get(projectile.id);
+        const id = projectile.id;
+
+        activeIds.add(id);
+
+        let model = projectileModels.get(id);
 
         if (!model) {
             model = createProjectile();
-            projectileModels.set(projectile.id, model);
+            projectileModels.set(id, model);
         }
 
         model.position.set(
-            projectile.x,
-            terrainHeight(projectile.x, projectile.z) + 1.6,
-            projectile.z
+            Number(projectile.x) || 0,
+            Number(projectile.y) || 0,
+            Number(projectile.z) || 0
         );
-
-        model.rotation.y += dt * 3;
     }
 
-    const activeProjectiles = new Set(
-        projectiles.map((projectile) => projectile.id)
-    );
-
     for (const [id, model] of projectileModels) {
-        if (!activeProjectiles.has(id)) {
+        if (!activeIds.has(id)) {
             scene.remove(model);
             projectileModels.delete(id);
         }
     }
 }
 
-function updateCamera() {
-    const me = players.find((player) => player.id === myId);
+/* ---------- ДВИЖЕНИЕ ОТНОСИТЕЛЬНО КАМЕРЫ ---------- */
 
-    if (!me) {
+function getMovementDirection() {
+    /*
+       При cameraYaw = 0:
+       вперёд = -Z
+       вправо = +X
+
+       При повороте камеры направление движения
+       автоматически поворачивается вместе с ней.
+    */
+
+    const forwardX = -Math.sin(cameraYaw);
+    const forwardZ = -Math.cos(cameraYaw);
+
+    const rightX = Math.cos(cameraYaw);
+    const rightZ = -Math.sin(cameraYaw);
+
+    let x = forwardX * (-moveY) + rightX * moveX;
+    let z = forwardZ * (-moveY) + rightZ * moveX;
+
+    const length = Math.hypot(x, z);
+
+    if (length > 1) {
+        x /= length;
+        z /= length;
+    }
+
+    return { x, z };
+}
+
+function sendPlayerInput(now) {
+    if (!joined || now - lastInputSend < 50) {
         return;
     }
 
-    camera.position.set(me.x, me.y + 1.65, me.z);
-    camera.rotation.order = "YXZ";
-    camera.rotation.y = cameraControl.yaw;
-    camera.rotation.x = cameraControl.pitch;
+    lastInputSend = now;
+
+    const direction = getMovementDirection();
+
+    sendMessage({
+        type: "input",
+        x: direction.x,
+        z: direction.z,
+        yaw: cameraYaw,
+        moveX: moveX,
+        moveY: moveY
+    });
 }
 
-function updateHands(time) {
-    const moving =
-        Math.abs(input.forward) + Math.abs(input.side) > 0.1;
+/* ---------- КАМЕРА ---------- */
 
-    const bob = moving ? Math.sin(time * 10) * 0.025 : 0;
+function updateCamera(deltaTime) {
+    const target = players.find(
+        player => player.id === myId
+    );
 
-    hands.position.y = bob;
-    hands.rotation.z = moving ? Math.sin(time * 5) * 0.025 : 0;
+    const x = target ? target.x : playerData.x;
+    const y = target ? target.y : playerData.y;
+    const z = target ? target.z : playerData.z;
+
+    const distance = 6;
+
+    const desiredPosition = new THREE.Vector3(
+        x + Math.sin(cameraYaw) * distance,
+        y + CONFIG.cameraHeight + 2 + cameraPitch * 2,
+        z + Math.cos(cameraYaw) * distance
+    );
+
+    const smoothing = 1 - Math.exp(
+        -CONFIG.cameraSmoothness * deltaTime
+    );
+
+    camera.position.lerp(desiredPosition, smoothing);
+
+    camera.lookAt(
+        x,
+        y + CONFIG.cameraHeight,
+        z
+    );
 }
 
-// ОСНОВНОЙ ЦИКЛ
-
-let previousFrame = performance.now();
+/* ---------- ИГРОВОЙ ЦИКЛ ---------- */
 
 function animate(now) {
     requestAnimationFrame(animate);
 
-    const dt = Math.min((now - previousFrame) / 1000, 0.05);
-    previousFrame = now;
+    const deltaTime = Math.min(
+        (now - lastFrame) / 1000,
+        0.05
+    );
 
-    updateCamera();
-    updatePlayers(dt);
-    updateHands(now / 1000);
+    lastFrame = now;
 
-    if (now - lastInputTime > 50) {
-        sendInput();
-        lastInputTime = now;
-    }
+    sendPlayerInput(now);
 
-    if (now - lastHudTime > 150) {
-        updateHUD();
-        lastHudTime = now;
-    }
+    updatePlayers();
+    updateProjectiles();
+    updateCamera(deltaTime);
 
     renderer.render(scene, camera);
 }
 
-requestAnimationFrame(animate);
-
-// ИЗМЕНЕНИЕ РАЗМЕРА ОКНА
+/* ---------- ИЗМЕНЕНИЕ РАЗМЕРА ЭКРАНА ---------- */
 
 window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.aspect =
+        window.innerWidth / window.innerHeight;
+
     camera.updateProjectionMatrix();
+
+    renderer.setSize(
+        window.innerWidth,
+        window.innerHeight
+    );
 
     renderer.setPixelRatio(
         Math.min(window.devicePixelRatio || 1, 1.5)
     );
-
-    renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+/* ---------- ЗАПУСК ---------- */
+
+updateHUD();
+connect();
+requestAnimationFrame(animate);
