@@ -6,8 +6,7 @@ const crypto = require("crypto");
 const WebSocket = require("ws");
 
 const PORT = Number(process.env.PORT) || 10000;
-const ROOT = __dirname;
-
+const ROOT = path.join(__dirname, "public");
 const players = new Map();
 
 const mimeTypes = {
@@ -15,64 +14,10 @@ const mimeTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
   ".ico": "image/x-icon"
 };
-
-// Раздаём файлы игры через тот же сервер
-const httpServer = http.createServer((req, res) => {
-  const pathname = new URL(req.url, "http://localhost").pathname;
-
-  if (pathname === "/ws") {
-    res.writeHead(426, {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Upgrade": "websocket"
-    });
-    res.end("Подключайся к /ws через WebSocket.");
-    return;
-  }
-
-  const requestedFile = pathname === "/"
-    ? "index.html"
-    : path.basename(decodeURIComponent(pathname));
-
-  const allowedFiles = new Set([
-    "index.html",
-    "game.js",
-    "style.css"
-  ]);
-
-  if (!allowedFiles.has(requestedFile)) {
-    res.writeHead(404);
-    res.end("Файл не найден");
-    return;
-  }
-
-  const filePath = path.join(ROOT, requestedFile);
-
-  fs.readFile(filePath, (error, data) => {
-    if (error) {
-      res.writeHead(404, {
-        "Content-Type": "text/plain; charset=utf-8"
-      });
-      res.end("Не удалось открыть " + requestedFile);
-      return;
-    }
-
-    res.writeHead(200, {
-      "Content-Type":
-        mimeTypes[path.extname(filePath)] || "application/octet-stream",
-      "Cache-Control": "no-cache"
-    });
-
-    res.end(data);
-  });
-});
-
-// WebSocket работает на том же HTTP-порту
-const wss = new WebSocket.Server({
-  server: httpServer,
-  path: "/ws"
-});
 
 function send(ws, data) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -80,15 +25,92 @@ function send(ws, data) {
   }
 }
 
+function publicPlayer(player) {
+  return {
+    id: player.id,
+    name: player.name,
+    x: player.x,
+    y: player.y,
+    health: player.health,
+    weapon: player.weapon,
+    level: player.level
+  };
+}
+
 function broadcast(data, exceptId = null) {
   const message = JSON.stringify(data);
 
   for (const [id, player] of players) {
-    if (id !== exceptId && player.ws.readyState === WebSocket.OPEN) {
+    if (
+      id !== exceptId &&
+      player.ws.readyState === WebSocket.OPEN
+    ) {
       player.ws.send(message);
     }
   }
 }
+
+// HTTP: отдаём файлы из папки public
+const server = http.createServer((req, res) => {
+  let pathname;
+
+  try {
+    pathname = decodeURIComponent(
+      new URL(req.url, "http://localhost").pathname
+    );
+  } catch {
+    res.writeHead(400);
+    res.end("Некорректный адрес");
+    return;
+  }
+
+  const filename = pathname === "/"
+    ? "index.html"
+    : path.basename(pathname);
+
+  const allowedFiles = new Set([
+    "index.html",
+    "game.js",
+    "style.css"
+  ]);
+
+  if (!allowedFiles.has(filename)) {
+    res.writeHead(404);
+    res.end("Файл не найден");
+    return;
+  }
+
+  const filePath = path.join(ROOT, filename);
+
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      console.error("Не удалось прочитать:", filePath);
+      console.error(error.message);
+
+      res.writeHead(500, {
+        "Content-Type": "text/plain; charset=utf-8"
+      });
+
+      res.end("Не удалось открыть " + filename);
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type":
+        mimeTypes[path.extname(filename)] ||
+        "application/octet-stream",
+      "Cache-Control": "no-cache"
+    });
+
+    res.end(data);
+  });
+});
+
+// WebSocket: тот же сервер, отдельный путь /ws
+const wss = new WebSocket.Server({
+  server,
+  path: "/ws"
+});
 
 wss.on("connection", (ws) => {
   const id = crypto.randomUUID();
@@ -105,16 +127,6 @@ wss.on("connection", (ws) => {
   };
 
   players.set(id, player);
-
-  const publicPlayer = (p) => ({
-    id: p.id,
-    name: p.name,
-    x: p.x,
-    y: p.y,
-    health: p.health,
-    weapon: p.weapon,
-    level: p.level
-  });
 
   send(ws, {
     type: "welcome",
@@ -136,12 +148,22 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (!message || typeof message.type !== "string") return;
+    if (!message || typeof message.type !== "string") {
+      return;
+    }
 
     if (message.type === "join") {
       if (typeof message.name === "string") {
-        player.name = message.name.trim().slice(0, 20) || "Игрок";
+        player.name =
+          message.name.trim().slice(0, 20) || "Игрок";
       }
+
+      broadcast({
+        type: "playerUpdated",
+        player: publicPlayer(player)
+      }, id);
+
+      return;
     }
 
     if (
@@ -158,7 +180,10 @@ wss.on("connection", (ws) => {
       }
 
       if (Number.isFinite(message.health)) {
-        player.health = Math.max(0, Math.min(100, message.health));
+        player.health = Math.max(
+          0,
+          Math.min(100, message.health)
+        );
       }
 
       if (typeof message.weapon === "string") {
@@ -166,16 +191,20 @@ wss.on("connection", (ws) => {
       }
 
       if (Number.isFinite(message.level)) {
-        player.level = Math.max(1, Math.min(999, message.level));
+        player.level = Math.max(
+          1,
+          Math.min(999, message.level)
+        );
       }
 
       broadcast({
         type: "playerUpdated",
         player: publicPlayer(player)
       }, id);
+
+      return;
     }
 
-    // Передаём другим игрокам события игры
     if (
       message.type === "shoot" ||
       message.type === "reload" ||
@@ -196,11 +225,12 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("error", (error) => {
-    console.error("WebSocket error:", error.message);
+    console.error("WebSocket:", error.message);
   });
 });
 
-httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Game server started on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("Сервер запущен на порту " + PORT);
+  console.log("Папка игры: " + ROOT);
 });
-      
+                                 
