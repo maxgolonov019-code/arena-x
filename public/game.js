@@ -1,153 +1,84 @@
 
+"use strict";
+
 (() => {
-    "use strict";
-
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
     const $ = id => document.getElementById(id);
+    const canvas = $("game");
+    const ctx = canvas.getContext("2d");
 
-    const CONFIG = {
-        worldWidth: 2200,
-        worldHeight: 2200,
-        enemySpawnTime: 1.8,
-        serverUrl: ""
-    };
+    const WORLD = { width: 2200, height: 2200 };
+    const SERVER_URL = `ws://${location.hostname || "localhost"}:3000`;
 
     const weapons = {
-        pistol: {
-            name: "Пистолет",
-            price: 0,
-            damage: 25,
-            delay: 0.32,
-            speed: 650,
-            spread: 0.025,
-            pellets: 1,
-            color: "#ffe18a",
-            description: "Надёжное начальное оружие",
-            owned: true
-        },
-        rifle: {
-            name: "Автомат",
-            price: 120,
-            damage: 15,
-            delay: 0.12,
-            speed: 850,
-            spread: 0.07,
-            pellets: 1,
-            color: "#8eeaff",
-            description: "Быстрая стрельба",
-            owned: false
-        },
-        shotgun: {
-            name: "Дробовик",
-            price: 180,
-            damage: 13,
-            delay: 0.65,
-            speed: 600,
-            spread: 0.48,
-            pellets: 6,
-            color: "#ffb56b",
-            description: "Шесть снарядов за выстрел",
-            owned: false
-        },
-        sniper: {
-            name: "Снайперка",
-            price: 250,
-            damage: 75,
-            delay: 1.1,
-            speed: 1200,
-            spread: 0.005,
-            pellets: 1,
-            color: "#c7a5ff",
-            description: "Большой урон и точность",
-            owned: false
-        }
+        pistol:  { name: "Пистолет", cost: 0,   damage: 25, rate: 0.35, ammo: 12, owned: true },
+        rifle:   { name: "Автомат",  cost: 120, damage: 18, rate: 0.12, ammo: 30, owned: false },
+        shotgun: { name: "Дробовик", cost: 180, damage: 12, rate: 0.65, ammo: 6,  owned: false },
+        sniper:  { name: "Снайперка",cost: 250, damage: 80, rate: 1.1,  ammo: 5,  owned: false }
     };
 
     const supers = {
-        blast: {
-            name: "Суперудар",
-            price: 100,
-            description: "Урон всем врагам поблизости",
-            owned: false,
-            cooldown: 8
-        },
-        dash: {
-            name: "Рывок",
-            price: 140,
-            description: "Быстрый рывок и защита",
-            owned: false,
-            cooldown: 6
-        },
-        storm: {
-            name: "Электрошок",
-            price: 220,
-            description: "Мощный удар по врагам",
-            owned: false,
-            cooldown: 12
-        }
+        blast: { name: "Энергетический взрыв", cost: 100, owned: false },
+        dash:  { name: "Рывок",                cost: 140, owned: false },
+        storm: { name: "Энергетический шторм", cost: 220, owned: false }
     };
 
     const player = {
-        x: CONFIG.worldWidth / 2,
-        y: CONFIG.worldHeight / 2,
-        radius: 17,
-        speed: 230,
+        id: null,
+        name: "Игрок",
+        x: WORLD.width / 2,
+        y: WORLD.height / 2,
+        angle: 0,
+        radius: 15,
+        speed: 220,
         health: 100,
-        maxHealth: 100,
-        damageBonus: 0,
         coins: 100,
         level: 1,
         xp: 0,
-        xpNext: 100,
+        dead: false,
         weapon: "pistol",
-        angle: 0,
-        fireTimer: 0,
+        ammo: 12,
+        maxAmmo: 12,
+        reloading: false,
+        shootTimer: 0,
+        super: null,
         superTimer: 0,
-        dashTimer: 0,
-        invulnerable: 0,
-        dead: false
+        invincible: 0
     };
 
     let cameraX = 0;
     let cameraY = 0;
     let lastTime = 0;
     let spawnTimer = 0;
+    let messageTimer = 0;
+    let gameStarted = false;
     let shooting = false;
     let joystickPointer = null;
     let joystickX = 0;
     let joystickY = 0;
-    let aimPointer = null;
-    let aimX = 0;
-    let aimY = 0;
-    let messageTimer = 0;
     let socket = null;
-    let online = false;
-    let gameStarted = false;
+    let connected = false;
+    let reconnectTimer = 0;
+    let moveSendTimer = 0;
+    let nextShotId = 0;
 
     const keys = {};
     const bullets = [];
     const enemies = [];
     const particles = [];
-    const decorations = [];
     const buildings = [];
+    const remotePlayers = new Map();
 
     function resize() {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-        canvas.width = Math.floor(innerWidth * dpr);
-        canvas.height = Math.floor(innerHeight * dpr);
-        canvas.style.width = innerWidth + "px";
-        canvas.style.height = innerHeight + "px";
-
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        canvas.width = window.innerWidth * devicePixelRatio;
+        canvas.height = window.innerHeight * devicePixelRatio;
+        ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     }
 
     window.addEventListener("resize", resize);
     resize();
 
     function random(min, max) {
-        return min + Math.random() * (max - min);
+        return Math.random() * (max - min) + min;
     }
 
     function distance(a, b) {
@@ -159,177 +90,133 @@
     }
 
     function showMessage(text) {
-        const element = $("message");
-
-        element.textContent = text;
-        element.style.opacity = "1";
+        const box = $("message");
+        box.textContent = text;
+        box.style.opacity = "1";
         messageTimer = 2.2;
     }
 
     function makeWorld() {
-        for (let i = 0; i < 450; i++) {
-            decorations.push({
-                x: random(0, CONFIG.worldWidth),
-                y: random(0, CONFIG.worldHeight),
-                size: random(2, 7),
-                color: Math.random() > 0.5 ? "#263d36" : "#30463c"
-            });
+        buildings.length = 0;
+
+        for (let x = 100; x < WORLD.width - 180; x += 255) {
+            for (let y = 100; y < WORLD.height - 180; y += 255) {
+                if (Math.random() < 0.68) {
+                    buildings.push({
+                        x,
+                        y,
+                        w: random(90, 145),
+                        h: random(85, 145),
+                        color: ["#29344b", "#30364b", "#253c49"][Math.floor(Math.random() * 3)]
+                    });
+                }
+            }
         }
 
-        const blockSize = 175;
-        const gap = 80;
+        // Свободная площадка для появления игроков.
+        for (let i = buildings.length - 1; i >= 0; i--) {
+            const b = buildings[i];
 
-        for (
-            let x = 100;
-            x < CONFIG.worldWidth - blockSize;
-            x += blockSize + gap
-        ) {
-            for (
-                let y = 100;
-                y < CONFIG.worldHeight - blockSize;
-                y += blockSize + gap
+            if (
+                player.x > b.x - 45 &&
+                player.x < b.x + b.w + 45 &&
+                player.y > b.y - 45 &&
+                player.y < b.y + b.h + 45
             ) {
-                if (Math.random() < 0.25) continue;
-
-                buildings.push({
-                    x,
-                    y,
-                    w: random(95, blockSize),
-                    h: random(95, blockSize),
-                    color: ["#41495a", "#4c5364", "#3c4657"][
-                        Math.floor(Math.random() * 3)
-                    ]
-                });
+                buildings.splice(i, 1);
             }
         }
     }
 
-    function circleRectCollision(x, y, radius, rect) {
-        const nearestX = clamp(x, rect.x, rect.x + rect.w);
-        const nearestY = clamp(y, rect.y, rect.y + rect.h);
-
-        return Math.hypot(x - nearestX, y - nearestY) < radius;
+    function circleRectCollision(x, y, r, b) {
+        const cx = clamp(x, b.x, b.x + b.w);
+        const cy = clamp(y, b.y, b.y + b.h);
+        return Math.hypot(x - cx, y - cy) < r;
     }
 
-    function blocked(x, y, radius) {
-        if (
-            x < radius ||
-            y < radius ||
-            x > CONFIG.worldWidth - radius ||
-            y > CONFIG.worldHeight - radius
-        ) {
+    function blocked(x, y, r = player.radius) {
+        if (x < r || y < r || x > WORLD.width - r || y > WORLD.height - r) {
             return true;
         }
 
-        return buildings.some(building =>
-            circleRectCollision(x, y, radius, building)
-        );
+        return buildings.some(b => circleRectCollision(x, y, r, b));
     }
 
     function movePlayer(dx, dy) {
-        const nextX = player.x + dx;
-        const nextY = player.y + dy;
+        const nx = player.x + dx;
+        const ny = player.y + dy;
 
-        if (!blocked(nextX, player.y, player.radius)) {
-            player.x = nextX;
-        }
-
-        if (!blocked(player.x, nextY, player.radius)) {
-            player.y = nextY;
-        }
+        if (!blocked(nx, player.y)) player.x = nx;
+        if (!blocked(player.x, ny)) player.y = ny;
     }
 
     function spawnEnemy() {
-        if (enemies.length >= 35) return;
-
-        let x = player.x;
-        let y = player.y;
-
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 25; i++) {
             const angle = random(0, Math.PI * 2);
-            const radius = random(330, 550);
+            const d = random(350, 650);
+            const x = clamp(player.x + Math.cos(angle) * d, 25, WORLD.width - 25);
+            const y = clamp(player.y + Math.sin(angle) * d, 25, WORLD.height - 25);
 
-            x = clamp(
-                player.x + Math.cos(angle) * radius,
-                30,
-                CONFIG.worldWidth - 30
-            );
-
-            y = clamp(
-                player.y + Math.sin(angle) * radius,
-                30,
-                CONFIG.worldHeight - 30
-            );
-
-            if (!blocked(x, y, 16)) break;
+            if (!blocked(x, y, 17)) {
+                enemies.push({
+                    x, y,
+                    radius: 15,
+                    health: 60 + player.level * 5,
+                    speed: random(45, 75) + player.level * 2,
+                    hitTimer: 0
+                });
+                return;
+            }
         }
-
-        const tough = Math.random() < 0.18;
-        const hp = tough ? 90 : 45;
-
-        enemies.push({
-            x,
-            y,
-            radius: tough ? 19 : 15,
-            health: hp,
-            maxHealth: hp,
-            speed: tough ? 75 : random(65, 100),
-            damage: tough ? 13 : 7,
-            attackTimer: 0,
-            color: tough ? "#c45bff" : "#ff596b",
-            xp: tough ? 30 : 15,
-            coins: tough ? 18 : 8
-        });
     }
 
     function shoot() {
-        if (!gameStarted || player.dead) return;
+        if (!gameStarted || player.dead || player.reloading) return;
+        if (player.shootTimer > 0) return;
 
         const weapon = weapons[player.weapon];
 
-        if (player.fireTimer > 0) return;
+        if (player.ammo <= 0) {
+            showMessage("Нет патронов! Нажми ↻");
+            return;
+        }
 
-        player.fireTimer = weapon.delay;
+        player.shootTimer = weapon.rate;
+        player.ammo--;
 
-        for (let i = 0; i < weapon.pellets; i++) {
-            const angle = player.angle + random(
-                -weapon.spread,
-                weapon.spread
-            );
+        const count = player.weapon === "shotgun" ? 5 : 1;
+
+        for (let i = 0; i < count; i++) {
+            const spread = player.weapon === "shotgun" ? random(-0.24, 0.24) : 0;
+            const angle = player.angle + spread;
 
             bullets.push({
-                x: player.x + Math.cos(angle) * 24,
-                y: player.y + Math.sin(angle) * 24,
-                vx: Math.cos(angle) * weapon.speed,
-                vy: Math.sin(angle) * weapon.speed,
-                damage: weapon.damage + player.damageBonus,
-                radius: weapon.pellets > 1 ? 4 : 5,
-                life: 1.5,
-                color: weapon.color
+                x: player.x + Math.cos(angle) * 23,
+                y: player.y + Math.sin(angle) * 23,
+                vx: Math.cos(angle) * 620,
+                vy: Math.sin(angle) * 620,
+                damage: weapon.damage,
+                life: 1.1,
+                color: player.weapon === "sniper" ? "#a7eaff" : "#ffe48a",
+                owner: "local",
+                shotId: ++nextShotId
             });
         }
 
-        makeParticles(
-            player.x + Math.cos(player.angle) * 24,
-            player.y + Math.sin(player.angle) * 24,
-            weapon.color,
-            4
-        );
+        updateHUD();
     }
 
-    function makeParticles(x, y, color, count) {
-        for (let i = 0; i < count; i++) {
-            const angle = random(0, Math.PI * 2);
-            const speed = random(30, 160);
+    function makeParticles(x, y, color, amount = 8) {
+        for (let i = 0; i < amount; i++) {
+            const a = random(0, Math.PI * 2);
+            const speed = random(30, 150);
 
             particles.push({
-                x,
-                y,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                life: random(0.15, 0.4),
-                color,
-                radius: random(2, 5)
+                x, y,
+                vx: Math.cos(a) * speed,
+                vy: Math.sin(a) * speed,
+                life: random(0.2, 0.65),
+                color
             });
         }
     }
@@ -337,635 +224,736 @@
     function gainXP(amount) {
         player.xp += amount;
 
-        while (player.xp >= player.xpNext) {
-            player.xp -= player.xpNext;
+        while (player.xp >= player.level * 100) {
+            player.xp -= player.level * 100;
             player.level++;
-            player.xpNext = Math.floor(player.xpNext * 1.35);
-            player.maxHealth += 10;
-            player.health = player.maxHealth;
-
-            showMessage("Новый уровень: " + player.level + "!");
+            player.coins += 35;
+            player.health = Math.min(100, player.health + 20);
+            showMessage("Уровень повышен! +35 монет");
         }
+
+        updateHUD();
     }
 
     function damageEnemy(enemy, damage) {
         enemy.health -= damage;
-
-        makeParticles(enemy.x, enemy.y, enemy.color, 5);
+        enemy.hitTimer = 0.1;
+        makeParticles(enemy.x, enemy.y, "#ff6578", 4);
 
         if (enemy.health <= 0) {
             const index = enemies.indexOf(enemy);
-
             if (index !== -1) enemies.splice(index, 1);
 
-            player.coins += enemy.coins;
-            gainXP(enemy.xp);
-
-            makeParticles(enemy.x, enemy.y, "#ffd66e", 12);
-            showMessage("+" + enemy.coins + " монет");
+            player.coins += 8;
+            gainXP(25);
+            makeParticles(enemy.x, enemy.y, "#ff6578", 12);
+            updateHUD();
         }
     }
 
     function useSuper() {
         if (!gameStarted || player.dead) return;
 
-        const active = Object.keys(supers).find(
-            key => supers[key].owned
-        );
-
-        if (!active) {
-            showMessage("Купи суперспособность в магазине!");
+        if (!player.super || !supers[player.super].owned) {
+            showMessage("Купи способность в магазине!");
             return;
         }
 
         if (player.superTimer > 0) {
-            showMessage("Способность ещё перезаряжается");
+            showMessage("Способность перезаряжается");
             return;
         }
 
-        if (active === "blast") {
+        if (player.super === "blast") {
             for (const enemy of [...enemies]) {
-                if (distance(player, enemy) < 260) {
-                    damageEnemy(enemy, 100 + player.damageBonus);
+                if (distance(player, enemy) < 240) {
+                    damageEnemy(enemy, 100);
                 }
             }
 
-            makeParticles(player.x, player.y, "#bc66ff", 45);
-            showMessage("СУПЕРУДАР!");
-        }
+            makeParticles(player.x, player.y, "#a86aff", 40);
+            player.superTimer = 8;
+            showMessage("Энергетический взрыв!");
+        } else if (player.super === "dash") {
+            const dx = Math.cos(player.angle) * 180;
+            const dy = Math.sin(player.angle) * 180;
 
-        if (active === "dash") {
-            player.dashTimer = 0.35;
-            player.invulnerable = 1;
-
-            makeParticles(player.x, player.y, "#5fffe1", 25);
-            showMessage("РЫВОК!");
-        }
-
-        if (active === "storm") {
-            for (const enemy of [...enemies]) {
-                if (distance(player, enemy) < 520) {
-                    damageEnemy(enemy, 180 + player.damageBonus);
-                    makeParticles(enemy.x, enemy.y, "#63caff", 14);
+            for (let i = 0; i < 10; i++) {
+                const t = (i + 1) / 10;
+                const x = player.x + dx * t;
+                const y = player.y + dy * t;
+                if (!blocked(x, y)) {
+                    player.x = x;
+                    player.y = y;
+                } else {
+                    break;
                 }
             }
 
-            makeParticles(player.x, player.y, "#63caff", 60);
-            showMessage("ЭЛЕКТРОШОК!");
-        }
+            player.invincible = 0.5;
+            player.superTimer = 5;
+            makeParticles(player.x, player.y, "#55ddff", 18);
+            showMessage("Рывок!");
+        } else if (player.super === "storm") {
+            for (const enemy of [...enemies]) {
+                if (distance(player, enemy) < 430) {
+                    damageEnemy(enemy, 150);
+                }
+            }
 
-        player.superTimer = supers[active].cooldown;
-        updateHUD();
+            makeParticles(player.x, player.y, "#6fffe0", 55);
+            player.superTimer = 14;
+            showMessage("Энергетический шторм!");
+        }
     }
 
     function update(dt) {
-        if (!gameStarted || player.dead) return;
-
-        player.fireTimer = Math.max(0, player.fireTimer - dt);
-        player.superTimer = Math.max(0, player.superTimer - dt);
-        player.invulnerable = Math.max(0, player.invulnerable - dt);
-
-        if (player.dashTimer > 0) {
-            player.dashTimer -= dt;
-
-            movePlayer(
-                Math.cos(player.angle) * 900 * dt,
-                Math.sin(player.angle) * 900 * dt
-            );
-        } else {
-            let dx = 0;
-            let dy = 0;
-
-            if (keys.w || keys.arrowup) dy -= 1;
-            if (keys.s || keys.arrowdown) dy += 1;
-            if (keys.a || keys.arrowleft) dx -= 1;
-            if (keys.d || keys.arrowright) dx += 1;
-
-            dx += joystickX;
-            dy += joystickY;
-
-            const length = Math.hypot(dx, dy);
-
-            if (length > 1) {
-                dx /= length;
-                dy /= length;
-            }
-
-            movePlayer(
-                dx * player.speed * dt,
-                dy * player.speed * dt
-            );
+        if (player.shootTimer > 0) player.shootTimer -= dt;
+        if (player.superTimer > 0) player.superTimer -= dt;
+        if (player.invincible > 0) player.invincible -= dt;
+        if (messageTimer > 0) {
+            messageTimer -= dt;
+            if (messageTimer <= 0) $("message").style.opacity = "0";
         }
 
-        if (shooting || keys[" "]) shoot();
+        if (!gameStarted || player.dead) return;
+
+        let dx = joystickX;
+        let dy = joystickY;
+
+        if (keys["w"] || keys["arrowup"]) dy--;
+        if (keys["s"] || keys["arrowdown"]) dy++;
+        if (keys["a"] || keys["arrowleft"]) dx--;
+        if (keys["d"] || keys["arrowright"]) dx++;
+
+        const len = Math.hypot(dx, dy);
+        if (len > 0) {
+            dx /= len;
+            dy /= len;
+            movePlayer(dx * player.speed * dt, dy * player.speed * dt);
+        }
+
+        if (shooting) shoot();
 
         spawnTimer += dt;
-
-        if (spawnTimer >= CONFIG.enemySpawnTime) {
+        if (spawnTimer > Math.max(0.6, 1.8 - player.level * 0.05)) {
             spawnTimer = 0;
-            spawnEnemy();
+            if (enemies.length < 35) spawnEnemy();
         }
 
         for (const enemy of [...enemies]) {
-            const dx = player.x - enemy.x;
-            const dy = player.y - enemy.y;
-            const dist = Math.hypot(dx, dy) || 1;
+            enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
 
-            if (dist > enemy.radius + player.radius + 3) {
-                const speed = enemy.speed * dt;
-                const nx = enemy.x + dx / dist * speed;
-                const ny = enemy.y + dy / dist * speed;
+            const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+            const d = distance(player, enemy);
 
-                if (!blocked(nx, enemy.y, enemy.radius)) {
-                    enemy.x = nx;
-                }
+            if (d > player.radius + enemy.radius + 2) {
+                const nx = enemy.x + Math.cos(angle) * enemy.speed * dt;
+                const ny = enemy.y + Math.sin(angle) * enemy.speed * dt;
 
-                if (!blocked(enemy.x, ny, enemy.radius)) {
-                    enemy.y = ny;
-                }
-            } else {
-                enemy.attackTimer -= dt;
+                if (!blocked(nx, enemy.y, enemy.radius)) enemy.x = nx;
+                if (!blocked(enemy.x, ny, enemy.radius)) enemy.y = ny;
+            } else if (player.invincible <= 0) {
+                player.health -= 18 * dt;
 
-                if (enemy.attackTimer <= 0 && player.invulnerable <= 0) {
-                    enemy.attackTimer = 0.8;
-                    player.health -= enemy.damage;
-
-                    makeParticles(player.x, player.y, "#ff596b", 5);
-
-                    if (player.health <= 0) {
-                        player.health = 0;
-                        player.dead = true;
-                        shooting = false;
-
-                        showMessage("Ты проиграл!");
-                        $("menu").classList.remove("hidden");
-                        $("startButton").textContent = "ИГРАТЬ СНОВА";
-                    }
+                if (player.health <= 0) {
+                    player.health = 0;
+                    player.dead = true;
+                    showMessage("Ты проиграл! Нажми «Начать игру» для повтора.");
                 }
             }
         }
 
         for (let i = bullets.length - 1; i >= 0; i--) {
-            const bullet = bullets[i];
+            const b = bullets[i];
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
+            b.life -= dt;
 
-            bullet.x += bullet.vx * dt;
-            bullet.y += bullet.vy * dt;
-            bullet.life -= dt;
-
-            let remove = bullet.life <= 0 ||
-                blocked(bullet.x, bullet.y, bullet.radius);
-
-            if (!remove) {
-                for (const enemy of [...enemies]) {
-                    if (
-                        distance(bullet, enemy) <
-                        enemy.radius + bullet.radius
-                    ) {
-                        damageEnemy(enemy, bullet.damage);
-                        remove = true;
-                        break;
-                    }
-                }
+            if (b.life <= 0 || blocked(b.x, b.y, 3)) {
+                bullets.splice(i, 1);
+                continue;
             }
 
-            if (remove) bullets.splice(i, 1);
+            if (b.owner === "local") {
+                const enemy = enemies.find(e => distance(b, e) < e.radius + 4);
+
+                if (enemy) {
+                    damageEnemy(enemy, b.damage);
+                    bullets.splice(i, 1);
+                }
+            }
         }
 
         for (let i = particles.length - 1; i >= 0; i--) {
             const p = particles[i];
-
             p.x += p.vx * dt;
             p.y += p.vy * dt;
             p.life -= dt;
-
             if (p.life <= 0) particles.splice(i, 1);
         }
 
         cameraX = clamp(
-            player.x - innerWidth / 2,
+            player.x - window.innerWidth / 2,
             0,
-            CONFIG.worldWidth - innerWidth
+            Math.max(0, WORLD.width - window.innerWidth)
         );
 
         cameraY = clamp(
-            player.y - innerHeight / 2,
+            player.y - window.innerHeight / 2,
             0,
-            CONFIG.worldHeight - innerHeight
+            Math.max(0, WORLD.height - window.innerHeight)
         );
 
-        if (messageTimer > 0) {
-            messageTimer -= dt;
+        moveSendTimer += dt;
+        if (connected && moveSendTimer >= 0.05) {
+            moveSendTimer = 0;
 
-            if (messageTimer <= 0) {
-                $("message").style.opacity = "0";
-            }
+            sendServer({
+                type: "move",
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                health: player.health,
+                weapon: player.weapon
+            });
         }
 
         updateHUD();
     }
 
+    function sendServer(data) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(data));
+        }
+    }
+
+    function connectServer() {
+        if (socket && (
+            socket.readyState === WebSocket.OPEN ||
+            socket.readyState === WebSocket.CONNECTING
+        )) return;
+
+        $("connection").textContent = "● Подключение...";
+        $("connection").style.color = "#ffcf6b";
+
+        try {
+            socket = new WebSocket(SERVER_URL);
+        } catch {
+            setConnectionStatus(false);
+            return;
+        }
+
+        socket.addEventListener("open", () => {
+            connected = true;
+            $("connection").textContent = "● Онлайн";
+            $("connection").style.color = "#6dffa3";
+
+            sendServer({
+                type: "join",
+                name: player.name
+            });
+
+            showMessage("Подключено к серверу!");
+        });
+
+        socket.addEventListener("message", event => {
+            let data;
+
+            try {
+                data = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+
+            switch (data.type) {
+                case "welcome":
+                    player.id = data.id;
+
+                    if (data.world) {
+                        WORLD.width = data.world.width || WORLD.width;
+                        WORLD.height = data.world.height || WORLD.height;
+                    }
+
+                    remotePlayers.clear();
+
+                    for (const p of data.players || []) {
+                        if (p.id !== player.id) {
+                            remotePlayers.set(p.id, p);
+                        }
+                    }
+
+                    updatePlayerCount();
+                    break;
+
+                case "joined":
+                    player.id = data.id;
+                    break;
+
+                case "playerJoined":
+                case "playerUpdated":
+                case "playerMoved":
+                    if (data.player && data.player.id !== player.id) {
+                        remotePlayers.set(data.player.id, data.player);
+                    }
+
+                    updatePlayerCount();
+                    break;
+
+                case "playerLeft":
+                    remotePlayers.delete(data.id);
+                    updatePlayerCount();
+                    break;
+
+                case "playerCount":
+                    $("playerCount").textContent = data.count;
+                    break;
+
+                case "error":
+                    showMessage(data.message || "Ошибка сервера");
+                    break;
+            }
+        });
+
+        socket.addEventListener("close", () => {
+            connected = false;
+            setConnectionStatus(false);
+            remotePlayers.clear();
+            updatePlayerCount();
+
+            if (gameStarted) {
+                showMessage("Связь с сервером потеряна");
+            }
+        });
+
+        socket.addEventListener("error", () => {
+            connected = false;
+            setConnectionStatus(false);
+        });
+    }
+
+    function setConnectionStatus(isOnline) {
+        $("connection").textContent = isOnline
+            ? "● Онлайн"
+            : "● Офлайн";
+
+        $("connection").style.color = isOnline
+            ? "#6dffa3"
+            : "#ff8b8b";
+    }
+
+    function updatePlayerCount() {
+        $("playerCount").textContent =
+            connected ? remotePlayers.size + 1 : 1;
+    }
+
     function draw() {
-        const w = innerWidth;
-        const h = innerHeight;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
 
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = "#263b32";
+        ctx.fillStyle = "#171f2b";
         ctx.fillRect(0, 0, w, h);
-
-        ctx.save();
-        ctx.translate(-cameraX, -cameraY);
 
         drawWorld();
         drawBuildings();
-        drawEnemies();
         drawBullets();
+        drawEnemies();
+        drawRemotePlayers();
         drawPlayer();
         drawParticles();
-
-        ctx.restore();
-
         drawMinimap();
     }
 
     function drawWorld() {
-        ctx.fillStyle = "#30483b";
-        ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+        ctx.fillStyle = "#1c2932";
+        ctx.fillRect(-cameraX, -cameraY, WORLD.width, WORLD.height);
 
-        ctx.fillStyle = "#3b414b";
+        const grid = 50;
+        ctx.strokeStyle = "#ffffff08";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
 
-        for (let x = 0; x < CONFIG.worldWidth; x += 255) {
-            ctx.fillRect(x, 0, 75, CONFIG.worldHeight);
+        for (let x = 0; x <= WORLD.width; x += grid) {
+            ctx.moveTo(x - cameraX, -cameraY);
+            ctx.lineTo(x - cameraX, WORLD.height - cameraY);
         }
 
-        for (let y = 0; y < CONFIG.worldHeight; y += 255) {
-            ctx.fillRect(0, y, CONFIG.worldWidth, 75);
+        for (let y = 0; y <= WORLD.height; y += grid) {
+            ctx.moveTo(-cameraX, y - cameraY);
+            ctx.lineTo(WORLD.width - cameraX, y - cameraY);
         }
 
-        ctx.strokeStyle = "#d3bf70";
-        ctx.lineWidth = 3;
-        ctx.setLineDash([18, 20]);
+        ctx.stroke();
 
-        for (let x = 0; x < CONFIG.worldWidth; x += 255) {
-            ctx.beginPath();
-            ctx.moveTo(x + 37, 0);
-            ctx.lineTo(x + 37, CONFIG.worldHeight);
-            ctx.stroke();
-        }
-
-        for (let y = 0; y < CONFIG.worldHeight; y += 255) {
-            ctx.beginPath();
-            ctx.moveTo(0, y + 37);
-            ctx.lineTo(CONFIG.worldWidth, y + 37);
-            ctx.stroke();
-        }
-
-        ctx.setLineDash([]);
-
-        for (const d of decorations) {
-            ctx.fillStyle = d.color;
-            ctx.beginPath();
-            ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        ctx.strokeStyle = "#61728c";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(
+            -cameraX,
+            -cameraY,
+            WORLD.width,
+            WORLD.height
+        );
     }
 
     function drawBuildings() {
         for (const b of buildings) {
-            ctx.fillStyle = "#20252d";
-            ctx.fillRect(b.x + 7, b.y + 9, b.w, b.h);
+            const x = b.x - cameraX;
+            const y = b.y - cameraY;
+
+            if (
+                x + b.w < -20 || y + b.h < -20 ||
+                x > window.innerWidth + 20 ||
+                y > window.innerHeight + 20
+            ) continue;
+
+            ctx.fillStyle = "#0005";
+            ctx.fillRect(x + 6, y + 7, b.w, b.h);
 
             ctx.fillStyle = b.color;
-            ctx.fillRect(b.x, b.y, b.w, b.h);
+            ctx.fillRect(x, y, b.w, b.h);
 
-            ctx.fillStyle = "#66778b";
+            ctx.strokeStyle = "#66738c";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, b.w, b.h);
 
-            for (let x = b.x + 14; x < b.x + b.w - 10; x += 29) {
-                for (let y = b.y + 14; y < b.y + b.h - 10; y += 29) {
-                    ctx.fillRect(x, y, 13, 12);
+            ctx.fillStyle = "#53627a";
+            ctx.fillRect(x + 9, y + 9, b.w - 18, 5);
+
+            ctx.fillStyle = "#101923";
+
+            for (let wx = x + 14; wx < x + b.w - 8; wx += 27) {
+                for (let wy = y + 25; wy < y + b.h - 8; wy += 30) {
+                    ctx.fillRect(wx, wy, 12, 15);
                 }
             }
-
-            ctx.fillStyle = "#272e3a";
-            ctx.fillRect(b.x + b.w / 2 - 10, b.y + b.h - 25, 20, 25);
         }
     }
 
-    function drawHealthBar(x, y, width, health, maxHealth) {
-        ctx.fillStyle = "#181b22";
+    function drawHealthBar(x, y, health, maxHealth = 100) {
+        const width = 36;
+        const ratio = clamp(health / maxHealth, 0, 1);
+
+        ctx.fillStyle = "#000a";
         ctx.fillRect(x - width / 2, y, width, 5);
 
-        ctx.fillStyle = "#53e18c";
-        ctx.fillRect(
-            x - width / 2,
-            y,
-            width * clamp(health / maxHealth, 0, 1),
-            5
-        );
+        ctx.fillStyle = ratio > 0.5
+            ? "#53e58c"
+            : ratio > 0.25
+                ? "#ffd15b"
+                : "#ff5368";
+
+        ctx.fillRect(x - width / 2, y, width * ratio, 5);
     }
 
     function drawEnemies() {
-        for (const enemy of enemies) {
-            ctx.fillStyle = "#16192388";
+        for (const e of enemies) {
+            const x = e.x - cameraX;
+            const y = e.y - cameraY;
+
+            ctx.fillStyle = e.hitTimer > 0 ? "#ffffff" : "#ff5268";
             ctx.beginPath();
-            ctx.ellipse(
-                enemy.x,
-                enemy.y + 5,
-                enemy.radius + 5,
-                enemy.radius * 0.7,
-                0,
-                0,
-                Math.PI * 2
-            );
+            ctx.arc(x, y, e.radius, 0, Math.PI * 2);
             ctx.fill();
 
-            ctx.fillStyle = enemy.color;
+            ctx.fillStyle = "#571f36";
             ctx.beginPath();
-            ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = "#fff";
-            ctx.beginPath();
-            ctx.arc(enemy.x - 5, enemy.y - 3, 3, 0, Math.PI * 2);
-            ctx.arc(enemy.x + 5, enemy.y - 3, 3, 0, Math.PI * 2);
+            ctx.arc(x + 4, y - 3, 4, 0, Math.PI * 2);
             ctx.fill();
 
             drawHealthBar(
-                enemy.x,
-                enemy.y - enemy.radius - 11,
-                36,
-                enemy.health,
-                enemy.maxHealth
+                x,
+                y - e.radius - 9,
+                e.health,
+                60 + player.level * 5
             );
         }
     }
 
-    function drawPlayer() {
+    function drawPlayerShape(x, y, angle, color, radius = 15) {
         ctx.save();
-        ctx.translate(player.x, player.y);
-        ctx.rotate(player.angle);
+        ctx.translate(x, y);
+        ctx.rotate(angle);
 
-        ctx.fillStyle = "#151a26";
+        ctx.fillStyle = "#0005";
         ctx.beginPath();
-        ctx.arc(0, 0, player.radius + 4, 0, Math.PI * 2);
+        ctx.ellipse(2, 4, radius + 2, radius, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = player.invulnerable > 0
-            ? "#5fffe1"
-            : "#6e91ff";
-
+        ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = "#dce7ff";
-        ctx.fillRect(5, -5, 25, 10);
+        ctx.strokeStyle = "#ffffffbb";
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-        ctx.fillStyle = "#26365f";
-        ctx.fillRect(5, -3, 20, 6);
+        ctx.fillStyle = "#e5edff";
+        ctx.fillRect(4, -4, radius + 10, 8);
 
         ctx.restore();
+    }
 
-        drawHealthBar(
-            player.x,
-            player.y - 31,
-            48,
-            player.health,
-            player.maxHealth
+    function drawPlayer() {
+        const x = player.x - cameraX;
+        const y = player.y - cameraY;
+
+        if (
+            player.invincible > 0 &&
+            Math.floor(performance.now() / 80) % 2
+        ) {
+            return;
+        }
+
+        drawPlayerShape(
+            x,
+            y,
+            player.angle,
+            "#6c8cff",
+            player.radius
         );
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 12px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(player.name, x, y - 25);
+
+        drawHealthBar(x, y - 20, player.health, 100);
+    }
+
+    function drawRemotePlayers() {
+        for (const p of remotePlayers.values()) {
+            const x = p.x - cameraX;
+            const y = p.y - cameraY;
+
+            if (
+                x < -60 || y < -60 ||
+                x > window.innerWidth + 60 ||
+                y > window.innerHeight + 60
+            ) continue;
+
+            drawPlayerShape(
+                x,
+                y,
+                p.angle || 0,
+                "#46e7d1",
+                15
+            );
+
+            ctx.fillStyle = "#d6fff9";
+            ctx.font = "bold 12px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText(p.name || "Игрок", x, y - 25);
+
+            drawHealthBar(x, y - 20, p.health ?? 100, 100);
+        }
     }
 
     function drawBullets() {
         for (const b of bullets) {
-            ctx.fillStyle = b.color;
+            ctx.fillStyle = b.color || "#ffe48a";
             ctx.beginPath();
-            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.arc(
+                b.x - cameraX,
+                b.y - cameraY,
+                4,
+                0,
+                Math.PI * 2
+            );
             ctx.fill();
         }
     }
 
     function drawParticles() {
         for (const p of particles) {
-            ctx.globalAlpha = clamp(p.life * 3, 0, 1);
+            ctx.globalAlpha = clamp(p.life * 2, 0, 1);
             ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.fillRect(
+                p.x - cameraX,
+                p.y - cameraY,
+                4,
+                4
+            );
         }
 
         ctx.globalAlpha = 1;
     }
 
     function drawMinimap() {
-        const size = 105;
-        const x = innerWidth - size - 12;
-        const y = 64;
+        const size = 100;
+        const x = window.innerWidth - size - 14;
+        const y = 100;
 
-        ctx.fillStyle = "#101522dd";
+        ctx.fillStyle = "#080c16cc";
         ctx.fillRect(x, y, size, size);
 
-        const sx = size / CONFIG.worldWidth;
-        const sy = size / CONFIG.worldHeight;
-
-        ctx.fillStyle = "#6d7787";
+        ctx.strokeStyle = "#7b8eaf";
+        ctx.strokeRect(x, y, size, size);
 
         for (const b of buildings) {
+            ctx.fillStyle = "#77839a";
             ctx.fillRect(
-                x + b.x * sx,
-                y + b.y * sy,
-                Math.max(1, b.w * sx),
-                Math.max(1, b.h * sy)
+                x + b.x / WORLD.width * size,
+                y + b.y / WORLD.height * size,
+                Math.max(1, b.w / WORLD.width * size),
+                Math.max(1, b.h / WORLD.height * size)
             );
         }
 
-        ctx.fillStyle = "#75a0ff";
+        for (const p of remotePlayers.values()) {
+            ctx.fillStyle = "#46e7d1";
+            ctx.fillRect(
+                x + p.x / WORLD.width * size - 2,
+                y + p.y / WORLD.height * size - 2,
+                4,
+                4
+            );
+        }
+
+        ctx.fillStyle = "#6c8cff";
         ctx.beginPath();
         ctx.arc(
-            x + player.x * sx,
-            y + player.y * sy,
+            x + player.x / WORLD.width * size,
+            y + player.y / WORLD.height * size,
             3,
             0,
             Math.PI * 2
         );
         ctx.fill();
-
-        ctx.fillStyle = "#ff596b";
-
-        for (const enemy of enemies) {
-            ctx.fillRect(
-                x + enemy.x * sx - 1,
-                y + enemy.y * sy - 1,
-                3,
-                3
-            );
-        }
     }
 
     function updateHUD() {
-        $("health").textContent =
-            Math.ceil(player.health) + " / " + player.maxHealth;
-
+        $("health").textContent = Math.ceil(player.health);
         $("coins").textContent = player.coins;
-        $("level").textContent = "Ур. " + player.level;
-        $("shopCoins").textContent = player.coins;
+        $("level").textContent = player.level;
 
         $("weaponName").textContent = weapons[player.weapon].name;
-        $("ammo").textContent = "Бесконечные патроны";
+        $("ammo").textContent = player.reloading
+            ? "Перезарядка..."
+            : `${player.ammo} / ${weapons[player.weapon].ammo}`;
 
-        const active = Object.values(supers).find(item => item.owned);
-
-        $("superName").textContent = active
-            ? active.name
+        $("superName").textContent = player.super
+            ? supers[player.super].name
             : "Суперспособность";
 
-        $("superStatus").textContent = !active
-            ? "Не куплено"
-            : player.superTimer > 0
-                ? "Перезарядка: " + player.superTimer.toFixed(1) + " с"
-                : "Готово!";
-
-        $("superButton").style.opacity =
-            active && player.superTimer <= 0 ? "1" : ".75";
+        $("superStatus").textContent = !player.super
+            ? "Не выбрана"
+            : !supers[player.super].owned
+                ? "Не куплена"
+                : player.superTimer > 0
+                    ? `Перезарядка: ${player.superTimer.toFixed(1)} с`
+                    : "Готова к использованию";
     }
 
     function renderShop() {
-        const container = $("shopItems");
-        container.innerHTML = "";
+        $("shopCoins").textContent = `Монеты: ${player.coins}`;
+        const items = $("shopItems");
+        items.innerHTML = "";
 
-        function addItem(name, description, price, action, owned) {
+        for (const [key, weapon] of Object.entries(weapons)) {
             const row = document.createElement("div");
             row.className = "shopItem";
 
             const info = document.createElement("div");
+            info.className = "itemInfo";
+
             const title = document.createElement("strong");
-            const desc = document.createElement("small");
+            title.textContent = weapon.name;
 
-            title.textContent = name;
-            desc.textContent = description;
+            const description = document.createElement("small");
+            description.textContent =
+                `Урон: ${weapon.damage} · Патроны: ${weapon.ammo}`;
 
-            info.append(title, desc);
+            info.append(title, description);
 
             const button = document.createElement("button");
-            button.textContent = owned ? "КУПЛЕНО" : price + " 🪙";
-            button.disabled = owned;
-            button.style.opacity = owned ? ".55" : "1";
+            button.className = "buyButton";
 
-            button.addEventListener("click", () => {
-                if (!owned) action();
-            });
+            if (player.weapon === key) {
+                button.textContent = "Выбрано";
+                button.disabled = true;
+            } else if (weapon.owned) {
+                button.textContent = "Выбрать";
+            } else {
+                button.textContent = `${weapon.cost} 🪙`;
+            }
+
+            button.onclick = () => {
+                if (weapon.owned) {
+                    player.weapon = key;
+                    player.ammo = weapon.ammo;
+                    player.maxAmmo = weapon.ammo;
+                    player.reloading = false;
+                    showMessage(`Оружие: ${weapon.name}`);
+                } else if (player.coins >= weapon.cost) {
+                    player.coins -= weapon.cost;
+                    weapon.owned = true;
+                    player.weapon = key;
+                    player.ammo = weapon.ammo;
+                    player.maxAmmo = weapon.ammo;
+                    showMessage(`Куплено: ${weapon.name}`);
+                } else {
+                    showMessage("Недостаточно монет!");
+                }
+
+                updateHUD();
+                renderShop();
+            };
 
             row.append(info, button);
-            container.appendChild(row);
+            items.append(row);
         }
 
-        Object.entries(weapons).forEach(([id, weapon]) => {
-            addItem(
-                weapon.name,
-                weapon.description,
-                weapon.price,
-                () => {
-                    if (player.coins < weapon.price) {
+        for (const [key, ability] of Object.entries(supers)) {
+            const row = document.createElement("div");
+            row.className = "shopItem";
+
+            const info = document.createElement("div");
+            info.className = "itemInfo";
+
+            const title = document.createElement("strong");
+            title.textContent = ability.name;
+
+            const description = document.createElement("small");
+            description.textContent = ability.owned
+                ? "Способность разблокирована"
+                : "Открой способность для боя";
+
+            info.append(title, description);
+
+            const button = document.createElement("button");
+            button.className = "buyButton";
+
+            if (player.super === key && ability.owned) {
+                button.textContent = "Выбрана";
+                button.disabled = true;
+            } else if (ability.owned) {
+                button.textContent = "Выбрать";
+            } else {
+                button.textContent = `${ability.cost} 🪙`;
+            }
+
+            button.onclick = () => {
+                if (!ability.owned) {
+                    if (player.coins < ability.cost) {
                         showMessage("Недостаточно монет!");
                         return;
                     }
 
-                    player.coins -= weapon.price;
-                    weapon.owned = true;
-                    player.weapon = id;
-
-                    renderShop();
-                    updateHUD();
-                    showMessage("Оружие куплено!");
-                },
-                weapon.owned
-            );
-        });
-
-        addItem(
-            "Улучшение урона",
-            "+5 урона за выстрел",
-            80,
-            () => {
-                if (player.coins < 80) {
-                    showMessage("Недостаточно монет!");
-                    return;
-                }
-
-                player.coins -= 80;
-                player.damageBonus += 5;
-
-                renderShop();
-                updateHUD();
-                showMessage("Урон увеличен!");
-            },
-            false
-        );
-
-        addItem(
-            "Улучшение здоровья",
-            "+25 к максимальному здоровью",
-            70,
-            () => {
-                if (player.coins < 70) {
-                    showMessage("Недостаточно монет!");
-                    return;
-                }
-
-                player.coins -= 70;
-                player.maxHealth += 25;
-                player.health = Math.min(
-                    player.maxHealth,
-                    player.health + 25
-                );
-
-                renderShop();
-                updateHUD();
-                showMessage("Здоровье увеличено!");
-            },
-            false
-        );
-
-        addItem(
-            "Ускорение",
-            "+25 к скорости движения",
-            90,
-            () => {
-                if (player.coins < 90) {
-                    showMessage("Недостаточно монет!");
-                    return;
-                }
-
-                player.coins -= 90;
-                player.speed += 25;
-
-                renderShop();
-                updateHUD();
-                showMessage("Скорость увеличена!");
-            },
-            false
-        );
-
-        Object.entries(supers).forEach(([id, ability]) => {
-            addItem(
-                "⚡ " + ability.name,
-                ability.description + " · Перезарядка " +
-                    ability.cooldown + " с",
-                ability.price,
-                () => {
-                    if (player.coins < ability.price) {
-                        showMessage("Недостаточно монет!");
-                        return;
-                    }
-
-                    player.coins -= ability.price;
+                    player.coins -= ability.cost;
                     ability.owned = true;
+                }
 
-                    renderShop();
-                    updateHUD();
-                    showMessage("Суперспособность куплена!");
-                },
-                ability.owned
-            );
-        });
+                player.super = key;
+                showMessage(`Выбрано: ${ability.name}`);
+                updateHUD();
+                renderShop();
+            };
+
+            row.append(info, button);
+            items.append(row);
+        }
     }
 
     function openShop() {
@@ -978,63 +966,28 @@
     }
 
     function startGame() {
-        if (gameStarted && !player.dead) {
-            $("menu").classList.add("hidden");
-            return;
-        }
+        if (gameStarted && !player.dead) return;
+
+        player.name = $("playerName").value.trim().slice(0, 16) || "Игрок";
 
         if (player.dead) {
-            player.x = CONFIG.worldWidth / 2;
-            player.y = CONFIG.worldHeight / 2;
-            player.health = player.maxHealth;
+            player.x = WORLD.width / 2;
+            player.y = WORLD.height / 2;
+            player.health = 100;
             player.dead = false;
-
+            player.ammo = weapons[player.weapon].ammo;
+            player.reloading = false;
             bullets.length = 0;
             enemies.length = 0;
-            particles.length = 0;
         }
 
         gameStarted = true;
-
-        const name = $("playerName").value.trim();
-        player.name = name || "Игрок";
-
         $("menu").classList.add("hidden");
+
+        makeWorld();
+        connectServer();
         updateHUD();
-
-        if (CONFIG.serverUrl) connectServer();
-    }
-
-    function connectServer() {
-        try {
-            socket = new WebSocket(CONFIG.serverUrl);
-
-            socket.addEventListener("open", () => {
-                online = true;
-
-                socket.send(JSON.stringify({
-                    type: "join",
-                    name: player.name
-                }));
-
-                showMessage("Подключено к серверу");
-            });
-
-            socket.addEventListener("close", () => {
-                online = false;
-                showMessage(
-                    "Сервер отключён. Игра продолжается локально."
-                );
-            });
-
-            socket.addEventListener("error", () => {
-                online = false;
-                showMessage("Сервер недоступен");
-            });
-        } catch (error) {
-            online = false;
-            showMessage("Не удалось подключиться к серверу");
-        }
+        showMessage("Удачи в бою!");
     }
 
     $("startButton").addEventListener("click", startGame);
@@ -1048,28 +1001,32 @@
         shoot();
     });
 
-    $("shootButton").addEventListener("pointerup", () => {
-        shooting = false;
-    });
-
-    $("shootButton").addEventListener("pointercancel", () => {
-        shooting = false;
-    });
-
-    $("shootButton").addEventListener("lostpointercapture", () => {
-        shooting = false;
-    });
+    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) {
+        $("shootButton").addEventListener(name, () => {
+            shooting = false;
+        });
+    }
 
     $("reloadButton").addEventListener("click", () => {
-        showMessage("У этого оружия бесконечные патроны");
+        if (
+            player.reloading ||
+            player.ammo >= weapons[player.weapon].ammo
+        ) return;
+
+        player.reloading = true;
+        updateHUD();
+
+        setTimeout(() => {
+            player.ammo = weapons[player.weapon].ammo;
+            player.reloading = false;
+            updateHUD();
+        }, 1000);
     });
 
     const joystick = $("joystick");
     const stick = $("stick");
 
     function moveStick(event) {
-        if (joystickPointer !== event.pointerId) return;
-
         const rect = joystick.getBoundingClientRect();
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
@@ -1077,17 +1034,31 @@
 
         let dx = event.clientX - cx;
         let dy = event.clientY - cy;
-        const length = Math.hypot(dx, dy);
+        const len = Math.hypot(dx, dy);
 
-        if (length > max) {
-            dx = dx / length * max;
-            dy = dy / length * max;
+        if (len > max) {
+            dx = dx / len * max;
+            dy = dy / len * max;
         }
 
         joystickX = dx / max;
         joystickY = dy / max;
+
         stick.style.transform = `translate(${dx}px, ${dy}px)`;
     }
+
+    joystick.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        joystickPointer = event.pointerId;
+        joystick.setPointerCapture(event.pointerId);
+        moveStick(event);
+    });
+
+    joystick.addEventListener("pointermove", event => {
+        if (event.pointerId === joystickPointer) {
+            moveStick(event);
+        }
+    });
 
     function stopStick(event) {
         if (event && event.pointerId !== joystickPointer) return;
@@ -1098,98 +1069,53 @@
         stick.style.transform = "translate(0, 0)";
     }
 
-    joystick.addEventListener("pointerdown", event => {
-        event.preventDefault();
-
-        if (joystickPointer !== null) return;
-
-        joystickPointer = event.pointerId;
-
-        try {
-            joystick.setPointerCapture(event.pointerId);
-        } catch (_) {}
-
-        moveStick(event);
-    });
-
-    joystick.addEventListener("pointermove", moveStick);
     joystick.addEventListener("pointerup", stopStick);
     joystick.addEventListener("pointercancel", stopStick);
-    joystick.addEventListener("lostpointercapture", stopStick);
+    window.addEventListener("blur", () => stopStick());
 
     canvas.addEventListener("pointerdown", event => {
         if (!gameStarted || player.dead) return;
 
-        aimPointer = event.pointerId;
+        const x = event.clientX + cameraX;
+        const y = event.clientY + cameraY;
 
-        const rect = canvas.getBoundingClientRect();
-        aimX = event.clientX - rect.left;
-        aimY = event.clientY - rect.top;
-
-        player.angle = Math.atan2(
-            aimY + cameraY - player.y,
-            aimX + cameraX - player.x
-        );
-
-        if (event.pointerType === "mouse") {
-            shooting = event.button === 0;
-
-            if (shooting) shoot();
-        }
+        player.angle = Math.atan2(y - player.y, x - player.x);
     });
 
     canvas.addEventListener("pointermove", event => {
-        if (!gameStarted) return;
+        if (!gameStarted || player.dead) return;
 
-        const rect = canvas.getBoundingClientRect();
-        aimX = event.clientX - rect.left;
-        aimY = event.clientY - rect.top;
+        const x = event.clientX + cameraX;
+        const y = event.clientY + cameraY;
 
-        player.angle = Math.atan2(
-            aimY + cameraY - player.y,
-            aimX + cameraX - player.x
-        );
-    });
-
-    canvas.addEventListener("pointerup", event => {
-        if (event.pointerId === aimPointer) aimPointer = null;
-
-        if (event.pointerType === "mouse") shooting = false;
-    });
-
-    canvas.addEventListener("pointercancel", () => {
-        aimPointer = null;
-        shooting = false;
+        player.angle = Math.atan2(y - player.y, x - player.x);
     });
 
     window.addEventListener("keydown", event => {
         keys[event.key.toLowerCase()] = true;
 
-        if (event.code === "Space") {
+        if (
+            ["arrowup", "arrowdown", "arrowleft", "arrowright", " "]
+                .includes(event.key.toLowerCase())
+        ) {
             event.preventDefault();
-            shooting = true;
-            shoot();
         }
 
-        if (event.key === "Escape") closeShop();
+        if (event.key.toLowerCase() === "r") {
+            $("reloadButton").click();
+        }
+
+        if (event.key.toLowerCase() === "e") {
+            useSuper();
+        }
     });
 
     window.addEventListener("keyup", event => {
         keys[event.key.toLowerCase()] = false;
-
-        if (event.code === "Space") shooting = false;
-    });
-
-    window.addEventListener("blur", () => {
-        shooting = false;
-
-        for (const key in keys) keys[key] = false;
-
-        stopStick();
     });
 
     function loop(time) {
-        const dt = Math.min((time - lastTime) / 1000 || 0, 0.04);
+        const dt = Math.min((time - lastTime) / 1000 || 0, 0.05);
         lastTime = time;
 
         update(dt);
