@@ -3,396 +3,599 @@
 
 (() => {
     const $ = id => document.getElementById(id);
+
     const canvas = $("game");
     const ctx = canvas.getContext("2d");
 
+    // Render: WSS для HTTPS, WS для HTTP.
+    // Предполагается, что сайт и WebSocket-сервер находятся
+    // на одном адресе Render.
+    const SERVER_URL =
+        `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+
     const WORLD = { width: 2200, height: 2200 };
-    const SERVER_URL = `ws://${location.hostname || "localhost"}:3000`;
+    const MAX_ENEMIES = 18;
 
-    const weapons = {
-        pistol:  { name: "Пистолет", cost: 0,   damage: 25, rate: 0.35, ammo: 12, owned: true },
-        rifle:   { name: "Автомат",  cost: 120, damage: 18, rate: 0.12, ammo: 30, owned: false },
-        shotgun: { name: "Дробовик", cost: 180, damage: 12, rate: 0.65, ammo: 6,  owned: false },
-        sniper:  { name: "Снайперка",cost: 250, damage: 80, rate: 1.1,  ammo: 5,  owned: false }
-    };
+    let socket = null;
+    let connected = false;
+    let gameStarted = false;
+    let lastTime = 0;
+    let lastServerUpdate = 0;
+    let messageTimer = 0;
+    let cameraX = 0;
+    let cameraY = 0;
+    let shooting = false;
+    let joystickX = 0;
+    let joystickY = 0;
+    let joystickPointer = null;
+    let keys = {};
+    let enemySpawnTimer = 0;
 
-    const supers = {
-        blast: { name: "Энергетический взрыв", cost: 100, owned: false },
-        dash:  { name: "Рывок",                cost: 140, owned: false },
-        storm: { name: "Энергетический шторм", cost: 220, owned: false }
-    };
+    const remotePlayers = new Map();
+    const buildings = [];
+    const bullets = [];
+    const enemies = [];
+    const particles = [];
 
     const player = {
         id: null,
         name: "Игрок",
-        x: WORLD.width / 2,
-        y: WORLD.height / 2,
+        x: 1100,
+        y: 1100,
         angle: 0,
         radius: 15,
-        speed: 220,
+        speed: 230,
         health: 100,
-        coins: 100,
+        coins: 0,
         level: 1,
-        xp: 0,
-        dead: false,
+        kills: 0,
         weapon: "pistol",
         ammo: 12,
         maxAmmo: 12,
         reloading: false,
-        shootTimer: 0,
+        reloadTimer: 0,
+        fireTimer: 0,
+        invincible: 0,
+        dead: false,
         super: null,
-        superTimer: 0,
-        invincible: 0
+        superTimer: 0
     };
 
-    let cameraX = 0;
-    let cameraY = 0;
-    let lastTime = 0;
-    let spawnTimer = 0;
-    let messageTimer = 0;
-    let gameStarted = false;
-    let shooting = false;
-    let joystickPointer = null;
-    let joystickX = 0;
-    let joystickY = 0;
-    let socket = null;
-    let connected = false;
-    let reconnectTimer = 0;
-    let moveSendTimer = 0;
-    let nextShotId = 0;
+    const weapons = {
+        pistol: {
+            name: "Пистолет",
+            damage: 20,
+            speed: 650,
+            delay: 0.3,
+            ammo: 12,
+            cost: 0,
+            owned: true,
+            spread: 0.035,
+            count: 1,
+            color: "#ffe38a"
+        },
+        smg: {
+            name: "ПП",
+            damage: 10,
+            speed: 700,
+            delay: 0.09,
+            ammo: 35,
+            cost: 100,
+            owned: false,
+            spread: 0.12,
+            count: 1,
+            color: "#83eaff"
+        },
+        shotgun: {
+            name: "Дробовик",
+            damage: 13,
+            speed: 570,
+            delay: 0.65,
+            ammo: 8,
+            cost: 180,
+            owned: false,
+            spread: 0.48,
+            count: 6,
+            color: "#ffb36b"
+        },
+        rifle: {
+            name: "Автомат",
+            damage: 24,
+            speed: 850,
+            delay: 0.19,
+            ammo: 30,
+            cost: 300,
+            owned: false,
+            spread: 0.055,
+            count: 1,
+            color: "#b6ff89"
+        },
+        sniper: {
+            name: "Снайперка",
+            damage: 70,
+            speed: 1100,
+            delay: 0.9,
+            ammo: 5,
+            cost: 450,
+            owned: false,
+            spread: 0.008,
+            count: 1,
+            color: "#ff91e8"
+        }
+    };
 
-    const keys = {};
-    const bullets = [];
-    const enemies = [];
-    const particles = [];
-    const buildings = [];
-    const remotePlayers = new Map();
+    const supers = {
+        dash: {
+            name: "Рывок",
+            cost: 100,
+            owned: false,
+            cooldown: 5
+        },
+        heal: {
+            name: "Лечение",
+            cost: 150,
+            owned: false,
+            cooldown: 12
+        },
+        blast: {
+            name: "Взрыв",
+            cost: 220,
+            owned: false,
+            cooldown: 10
+        }
+    };
 
-    function resize() {
-        canvas.width = window.innerWidth * devicePixelRatio;
-        canvas.height = window.innerHeight * devicePixelRatio;
-        ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    window.addEventListener("resize", resize);
-    resize();
-
     function random(min, max) {
-        return Math.random() * (max - min) + min;
+        return min + Math.random() * (max - min);
     }
 
     function distance(a, b) {
         return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
-    function clamp(value, min, max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
     function showMessage(text) {
         const box = $("message");
+        if (!box) return;
+
         box.textContent = text;
-        box.style.opacity = "1";
-        messageTimer = 2.2;
+        box.classList.remove("hidden");
+
+        clearTimeout(messageTimer);
+        messageTimer = setTimeout(() => {
+            box.classList.add("hidden");
+        }, 2200);
     }
+
+    function resizeCanvas() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        canvas.width = Math.floor(window.innerWidth * dpr);
+        canvas.height = Math.floor(window.innerHeight * dpr);
+
+        canvas.style.width = window.innerWidth + "px";
+        canvas.style.height = window.innerHeight + "px";
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
 
     function makeWorld() {
         buildings.length = 0;
 
-        for (let x = 100; x < WORLD.width - 180; x += 255) {
-            for (let y = 100; y < WORLD.height - 180; y += 255) {
-                if (Math.random() < 0.68) {
-                    buildings.push({
-                        x,
-                        y,
-                        w: random(90, 145),
-                        h: random(85, 145),
-                        color: ["#29344b", "#30364b", "#253c49"][Math.floor(Math.random() * 3)]
-                    });
-                }
+        for (let i = 0; i < 48; i++) {
+            const w = random(100, 210);
+            const h = random(90, 180);
+            const x = random(40, WORLD.width - w - 40);
+            const y = random(40, WORLD.height - h - 40);
+
+            if (Math.hypot(x + w / 2 - player.x,
+                y + h / 2 - player.y) < 250) {
+                continue;
             }
-        }
 
-        // Свободная площадка для появления игроков.
-        for (let i = buildings.length - 1; i >= 0; i--) {
-            const b = buildings[i];
+            const overlaps = buildings.some(b =>
+                x < b.x + b.w + 35 &&
+                x + w + 35 > b.x &&
+                y < b.y + b.h + 35 &&
+                y + h + 35 > b.y
+            );
 
-            if (
-                player.x > b.x - 45 &&
-                player.x < b.x + b.w + 45 &&
-                player.y > b.y - 45 &&
-                player.y < b.y + b.h + 45
-            ) {
-                buildings.splice(i, 1);
+            if (!overlaps) {
+                buildings.push({
+                    x, y, w, h,
+                    color: ["#354357", "#3b4658", "#303e50"][
+                        Math.floor(Math.random() * 3)
+                    ]
+                });
             }
         }
     }
 
-    function circleRectCollision(x, y, r, b) {
-        const cx = clamp(x, b.x, b.x + b.w);
-        const cy = clamp(y, b.y, b.y + b.h);
-        return Math.hypot(x - cx, y - cy) < r;
-    }
+    function circleHitsBuilding(x, y, radius) {
+        return buildings.some(b => {
+            const nx = clamp(x, b.x, b.x + b.w);
+            const ny = clamp(y, b.y, b.y + b.h);
 
-    function blocked(x, y, r = player.radius) {
-        if (x < r || y < r || x > WORLD.width - r || y > WORLD.height - r) {
-            return true;
-        }
-
-        return buildings.some(b => circleRectCollision(x, y, r, b));
+            return Math.hypot(x - nx, y - ny) < radius;
+        });
     }
 
     function movePlayer(dx, dy) {
-        const nx = player.x + dx;
-        const ny = player.y + dy;
+        const nx = clamp(
+            player.x + dx,
+            player.radius,
+            WORLD.width - player.radius
+        );
 
-        if (!blocked(nx, player.y)) player.x = nx;
-        if (!blocked(player.x, ny)) player.y = ny;
+        const ny = clamp(
+            player.y + dy,
+            player.radius,
+            WORLD.height - player.radius
+        );
+
+        if (!circleHitsBuilding(nx, player.y, player.radius)) {
+            player.x = nx;
+        }
+
+        if (!circleHitsBuilding(player.x, ny, player.radius)) {
+            player.y = ny;
+        }
     }
 
     function spawnEnemy() {
-        for (let i = 0; i < 25; i++) {
-            const angle = random(0, Math.PI * 2);
-            const d = random(350, 650);
-            const x = clamp(player.x + Math.cos(angle) * d, 25, WORLD.width - 25);
-            const y = clamp(player.y + Math.sin(angle) * d, 25, WORLD.height - 25);
+        if (enemies.length >= MAX_ENEMIES || player.dead) return;
 
-            if (!blocked(x, y, 17)) {
+        for (let tries = 0; tries < 30; tries++) {
+            const angle = random(0, Math.PI * 2);
+            const dist = random(350, 600);
+            const x = clamp(
+                player.x + Math.cos(angle) * dist,
+                30,
+                WORLD.width - 30
+            );
+            const y = clamp(
+                player.y + Math.sin(angle) * dist,
+                30,
+                WORLD.height - 30
+            );
+
+            if (
+                !circleHitsBuilding(x, y, 16) &&
+                Math.hypot(x - player.x, y - player.y) > 240
+            ) {
                 enemies.push({
                     x, y,
                     radius: 15,
                     health: 60 + player.level * 5,
-                    speed: random(45, 75) + player.level * 2,
+                    speed: random(55, 85) + player.level * 2,
+                    damage: 8,
+                    attackTimer: random(0.2, 0.8),
                     hitTimer: 0
                 });
+
                 return;
             }
         }
     }
 
-    function shoot() {
-        if (!gameStarted || player.dead || player.reloading) return;
-        if (player.shootTimer > 0) return;
-
-        const weapon = weapons[player.weapon];
-
-        if (player.ammo <= 0) {
-            showMessage("Нет патронов! Нажми ↻");
-            return;
-        }
-
-        player.shootTimer = weapon.rate;
-        player.ammo--;
-
-        const count = player.weapon === "shotgun" ? 5 : 1;
-
-        for (let i = 0; i < count; i++) {
-            const spread = player.weapon === "shotgun" ? random(-0.24, 0.24) : 0;
-            const angle = player.angle + spread;
-
-            bullets.push({
-                x: player.x + Math.cos(angle) * 23,
-                y: player.y + Math.sin(angle) * 23,
-                vx: Math.cos(angle) * 620,
-                vy: Math.sin(angle) * 620,
-                damage: weapon.damage,
-                life: 1.1,
-                color: player.weapon === "sniper" ? "#a7eaff" : "#ffe48a",
-                owner: "local",
-                shotId: ++nextShotId
-            });
-        }
-
-        updateHUD();
-    }
-
-    function makeParticles(x, y, color, amount = 8) {
+    function addParticles(x, y, color, amount = 7) {
         for (let i = 0; i < amount; i++) {
-            const a = random(0, Math.PI * 2);
-            const speed = random(30, 150);
-
             particles.push({
                 x, y,
-                vx: Math.cos(a) * speed,
-                vy: Math.sin(a) * speed,
-                life: random(0.2, 0.65),
+                vx: random(-100, 100),
+                vy: random(-100, 100),
+                life: random(0.2, 0.6),
                 color
             });
         }
     }
 
-    function gainXP(amount) {
-        player.xp += amount;
+    function shoot() {
+        if (!gameStarted || player.dead || player.reloading) return;
+        if (player.fireTimer > 0) return;
 
-        while (player.xp >= player.level * 100) {
-            player.xp -= player.level * 100;
-            player.level++;
-            player.coins += 35;
-            player.health = Math.min(100, player.health + 20);
-            showMessage("Уровень повышен! +35 монет");
+        const weapon = weapons[player.weapon];
+
+        if (player.ammo <= 0) {
+            showMessage("Нажми перезарядку!");
+            player.fireTimer = 0.2;
+            return;
+        }
+
+        player.ammo--;
+        player.fireTimer = weapon.delay;
+
+        for (let i = 0; i < weapon.count; i++) {
+            const angle = player.angle + random(
+                -weapon.spread,
+                weapon.spread
+            );
+
+            bullets.push({
+                x: player.x + Math.cos(angle) * 23,
+                y: player.y + Math.sin(angle) * 23,
+                vx: Math.cos(angle) * weapon.speed,
+                vy: Math.sin(angle) * weapon.speed,
+                damage: weapon.damage,
+                life: 1.3,
+                color: weapon.color
+            });
+        }
+
+        addParticles(
+            player.x + Math.cos(player.angle) * 25,
+            player.y + Math.sin(player.angle) * 25,
+            weapon.color,
+            3
+        );
+
+        updateHUD();
+    }
+
+    function reload() {
+        if (
+            player.dead ||
+            player.reloading ||
+            player.ammo >= weapons[player.weapon].ammo
+        ) return;
+
+        player.reloading = true;
+        player.reloadTimer = 1.1;
+        updateHUD();
+    }
+
+    function useSuper() {
+        if (!player.super || player.dead) {
+            showMessage("Сначала выбери суперспособность в магазине!");
+            return;
+        }
+
+        const ability = supers[player.super];
+
+        if (!ability || !ability.owned) {
+            showMessage("Способность не куплена!");
+            return;
+        }
+
+        if (player.superTimer > 0) {
+            showMessage("Способность перезаряжается!");
+            return;
+        }
+
+        if (player.super === "dash") {
+            const dx = Math.cos(player.angle) * 180;
+            const dy = Math.sin(player.angle) * 180;
+
+            movePlayer(dx, dy);
+            player.invincible = 0.7;
+            addParticles(player.x, player.y, "#65eaff", 20);
+        }
+
+        if (player.super === "heal") {
+            player.health = Math.min(100, player.health + 40);
+            addParticles(player.x, player.y, "#65ff9b", 18);
+            showMessage("Здоровье восстановлено!");
+        }
+
+        if (player.super === "blast") {
+            for (const e of enemies) {
+                if (distance(player, e) < 230) {
+                    e.health -= 90;
+                    e.hitTimer = 0.15;
+                    addParticles(e.x, e.y, "#ff7cda", 12);
+                }
+            }
+
+            addParticles(player.x, player.y, "#ff7cda", 32);
+            showMessage("Взрыв!");
+        }
+
+        player.superTimer = ability.cooldown;
+        updateHUD();
+    }
+
+    function damagePlayer(amount) {
+        if (player.invincible > 0 || player.dead) return;
+
+        player.health = Math.max(0, player.health - amount);
+        player.invincible = 0.35;
+
+        addParticles(player.x, player.y, "#ff5268", 8);
+
+        if (player.health <= 0) {
+            player.dead = true;
+            shooting = false;
+            showMessage("Ты проиграл! Нажми «Начать игру», чтобы возродиться.");
         }
 
         updateHUD();
     }
 
-    function damageEnemy(enemy, damage) {
-        enemy.health -= damage;
-        enemy.hitTimer = 0.1;
-        makeParticles(enemy.x, enemy.y, "#ff6578", 4);
+    function killEnemy(index) {
+        const e = enemies[index];
 
-        if (enemy.health <= 0) {
-            const index = enemies.indexOf(enemy);
-            if (index !== -1) enemies.splice(index, 1);
+        addParticles(e.x, e.y, "#ff5268", 15);
+        enemies.splice(index, 1);
 
-            player.coins += 8;
-            gainXP(25);
-            makeParticles(enemy.x, enemy.y, "#ff6578", 12);
-            updateHUD();
-        }
-    }
+        player.kills++;
+        player.coins += 10;
+        player.level = 1 + Math.floor(player.kills / 5);
 
-    function useSuper() {
-        if (!gameStarted || player.dead) return;
-
-        if (!player.super || !supers[player.super].owned) {
-            showMessage("Купи способность в магазине!");
-            return;
-        }
-
-        if (player.superTimer > 0) {
-            showMessage("Способность перезаряжается");
-            return;
-        }
-
-        if (player.super === "blast") {
-            for (const enemy of [...enemies]) {
-                if (distance(player, enemy) < 240) {
-                    damageEnemy(enemy, 100);
-                }
-            }
-
-            makeParticles(player.x, player.y, "#a86aff", 40);
-            player.superTimer = 8;
-            showMessage("Энергетический взрыв!");
-        } else if (player.super === "dash") {
-            const dx = Math.cos(player.angle) * 180;
-            const dy = Math.sin(player.angle) * 180;
-
-            for (let i = 0; i < 10; i++) {
-                const t = (i + 1) / 10;
-                const x = player.x + dx * t;
-                const y = player.y + dy * t;
-                if (!blocked(x, y)) {
-                    player.x = x;
-                    player.y = y;
-                } else {
-                    break;
-                }
-            }
-
-            player.invincible = 0.5;
-            player.superTimer = 5;
-            makeParticles(player.x, player.y, "#55ddff", 18);
-            showMessage("Рывок!");
-        } else if (player.super === "storm") {
-            for (const enemy of [...enemies]) {
-                if (distance(player, enemy) < 430) {
-                    damageEnemy(enemy, 150);
-                }
-            }
-
-            makeParticles(player.x, player.y, "#6fffe0", 55);
-            player.superTimer = 14;
-            showMessage("Энергетический шторм!");
-        }
+        showMessage("+10 монет!");
+        updateHUD();
     }
 
     function update(dt) {
-        if (player.shootTimer > 0) player.shootTimer -= dt;
-        if (player.superTimer > 0) player.superTimer -= dt;
-        if (player.invincible > 0) player.invincible -= dt;
-        if (messageTimer > 0) {
-            messageTimer -= dt;
-            if (messageTimer <= 0) $("message").style.opacity = "0";
+        if (!gameStarted || player.dead) {
+            updateCamera();
+            return;
         }
 
-        if (!gameStarted || player.dead) return;
+        player.fireTimer = Math.max(0, player.fireTimer - dt);
+        player.invincible = Math.max(0, player.invincible - dt);
+        player.superTimer = Math.max(0, player.superTimer - dt);
+
+        if (player.reloading) {
+            player.reloadTimer -= dt;
+
+            if (player.reloadTimer <= 0) {
+                player.ammo = weapons[player.weapon].ammo;
+                player.maxAmmo = player.ammo;
+                player.reloading = false;
+                showMessage("Перезарядка завершена");
+                updateHUD();
+            }
+        }
 
         let dx = joystickX;
         let dy = joystickY;
 
-        if (keys["w"] || keys["arrowup"]) dy--;
-        if (keys["s"] || keys["arrowdown"]) dy++;
-        if (keys["a"] || keys["arrowleft"]) dx--;
-        if (keys["d"] || keys["arrowright"]) dx++;
+        if (keys["w"] || keys["arrowup"]) dy -= 1;
+        if (keys["s"] || keys["arrowdown"]) dy += 1;
+        if (keys["a"] || keys["arrowleft"]) dx -= 1;
+        if (keys["d"] || keys["arrowright"]) dx += 1;
 
         const len = Math.hypot(dx, dy);
+
         if (len > 0) {
             dx /= len;
             dy /= len;
-            movePlayer(dx * player.speed * dt, dy * player.speed * dt);
-        }
 
-        if (shooting) shoot();
+            movePlayer(
+                dx * player.speed * dt,
+                dy * player.speed * dt
+            );
 
-        spawnTimer += dt;
-        if (spawnTimer > Math.max(0.6, 1.8 - player.level * 0.05)) {
-            spawnTimer = 0;
-            if (enemies.length < 35) spawnEnemy();
-        }
-
-        for (const enemy of [...enemies]) {
-            enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
-
-            const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
-            const d = distance(player, enemy);
-
-            if (d > player.radius + enemy.radius + 2) {
-                const nx = enemy.x + Math.cos(angle) * enemy.speed * dt;
-                const ny = enemy.y + Math.sin(angle) * enemy.speed * dt;
-
-                if (!blocked(nx, enemy.y, enemy.radius)) enemy.x = nx;
-                if (!blocked(enemy.x, ny, enemy.radius)) enemy.y = ny;
-            } else if (player.invincible <= 0) {
-                player.health -= 18 * dt;
-
-                if (player.health <= 0) {
-                    player.health = 0;
-                    player.dead = true;
-                    showMessage("Ты проиграл! Нажми «Начать игру» для повтора.");
-                }
+            if (!joystickPointer) {
+                player.angle = Math.atan2(dy, dx);
             }
         }
 
+        if (shooting || keys[" "]) shoot();
+
+        updateBullets(dt);
+        updateEnemies(dt);
+        updateParticles(dt);
+
+        enemySpawnTimer -= dt;
+
+        if (enemySpawnTimer <= 0) {
+            spawnEnemy();
+            enemySpawnTimer = random(0.7, 1.5);
+        }
+
+        updateCamera();
+        updateHUD();
+
+        if (connected && performance.now() - lastServerUpdate > 50) {
+            lastServerUpdate = performance.now();
+
+            sendServer({
+                type: "move",
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                health: player.health,
+                weapon: player.weapon
+            });
+        }
+    }
+
+    function updateBullets(dt) {
         for (let i = bullets.length - 1; i >= 0; i--) {
             const b = bullets[i];
+
             b.x += b.vx * dt;
             b.y += b.vy * dt;
             b.life -= dt;
 
-            if (b.life <= 0 || blocked(b.x, b.y, 3)) {
+            if (
+                b.life <= 0 ||
+                b.x < 0 || b.y < 0 ||
+                b.x > WORLD.width || b.y > WORLD.height ||
+                circleHitsBuilding(b.x, b.y, 3)
+            ) {
                 bullets.splice(i, 1);
                 continue;
             }
 
-            if (b.owner === "local") {
-                const enemy = enemies.find(e => distance(b, e) < e.radius + 4);
+            let hit = false;
 
-                if (enemy) {
-                    damageEnemy(enemy, b.damage);
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                const e = enemies[j];
+
+                if (Math.hypot(b.x - e.x, b.y - e.y) <
+                    e.radius + 4) {
+                    e.health -= b.damage;
+                    e.hitTimer = 0.12;
+                    addParticles(b.x, b.y, b.color, 4);
                     bullets.splice(i, 1);
+                    hit = true;
+
+                    if (e.health <= 0) killEnemy(j);
+                    break;
                 }
             }
-        }
 
+            if (hit) continue;
+        }
+    }
+
+    function updateEnemies(dt) {
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const e = enemies[i];
+
+            e.hitTimer = Math.max(0, e.hitTimer - dt);
+            e.attackTimer -= dt;
+
+            const dx = player.x - e.x;
+            const dy = player.y - e.y;
+            const dist = Math.hypot(dx, dy) || 1;
+
+            if (dist > player.radius + e.radius + 4) {
+                const mx = dx / dist * e.speed * dt;
+                const my = dy / dist * e.speed * dt;
+
+                const nx = e.x + mx;
+                const ny = e.y + my;
+
+                if (!circleHitsBuilding(nx, e.y, e.radius)) {
+                    e.x = nx;
+                }
+
+                if (!circleHitsBuilding(e.x, ny, e.radius)) {
+                    e.y = ny;
+                }
+            } else if (e.attackTimer <= 0) {
+                damagePlayer(e.damage);
+                e.attackTimer = 0.8;
+            }
+
+            if (e.health <= 0) killEnemy(i);
+        }
+    }
+
+    function updateParticles(dt) {
         for (let i = particles.length - 1; i >= 0; i--) {
             const p = particles[i];
+
             p.x += p.vx * dt;
             p.y += p.vy * dt;
             p.life -= dt;
+            p.vx *= 0.96;
+            p.vy *= 0.96;
+
             if (p.life <= 0) particles.splice(i, 1);
         }
+    }
 
+    function updateCamera() {
         cameraX = clamp(
             player.x - window.innerWidth / 2,
             0,
@@ -404,147 +607,6 @@
             0,
             Math.max(0, WORLD.height - window.innerHeight)
         );
-
-        moveSendTimer += dt;
-        if (connected && moveSendTimer >= 0.05) {
-            moveSendTimer = 0;
-
-            sendServer({
-                type: "move",
-                x: player.x,
-                y: player.y,
-                angle: player.angle,
-                health: player.health,
-                weapon: player.weapon
-            });
-        }
-
-        updateHUD();
-    }
-
-    function sendServer(data) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify(data));
-        }
-    }
-
-    function connectServer() {
-        if (socket && (
-            socket.readyState === WebSocket.OPEN ||
-            socket.readyState === WebSocket.CONNECTING
-        )) return;
-
-        $("connection").textContent = "● Подключение...";
-        $("connection").style.color = "#ffcf6b";
-
-        try {
-            socket = new WebSocket(SERVER_URL);
-        } catch {
-            setConnectionStatus(false);
-            return;
-        }
-
-        socket.addEventListener("open", () => {
-            connected = true;
-            $("connection").textContent = "● Онлайн";
-            $("connection").style.color = "#6dffa3";
-
-            sendServer({
-                type: "join",
-                name: player.name
-            });
-
-            showMessage("Подключено к серверу!");
-        });
-
-        socket.addEventListener("message", event => {
-            let data;
-
-            try {
-                data = JSON.parse(event.data);
-            } catch {
-                return;
-            }
-
-            switch (data.type) {
-                case "welcome":
-                    player.id = data.id;
-
-                    if (data.world) {
-                        WORLD.width = data.world.width || WORLD.width;
-                        WORLD.height = data.world.height || WORLD.height;
-                    }
-
-                    remotePlayers.clear();
-
-                    for (const p of data.players || []) {
-                        if (p.id !== player.id) {
-                            remotePlayers.set(p.id, p);
-                        }
-                    }
-
-                    updatePlayerCount();
-                    break;
-
-                case "joined":
-                    player.id = data.id;
-                    break;
-
-                case "playerJoined":
-                case "playerUpdated":
-                case "playerMoved":
-                    if (data.player && data.player.id !== player.id) {
-                        remotePlayers.set(data.player.id, data.player);
-                    }
-
-                    updatePlayerCount();
-                    break;
-
-                case "playerLeft":
-                    remotePlayers.delete(data.id);
-                    updatePlayerCount();
-                    break;
-
-                case "playerCount":
-                    $("playerCount").textContent = data.count;
-                    break;
-
-                case "error":
-                    showMessage(data.message || "Ошибка сервера");
-                    break;
-            }
-        });
-
-        socket.addEventListener("close", () => {
-            connected = false;
-            setConnectionStatus(false);
-            remotePlayers.clear();
-            updatePlayerCount();
-
-            if (gameStarted) {
-                showMessage("Связь с сервером потеряна");
-            }
-        });
-
-        socket.addEventListener("error", () => {
-            connected = false;
-            setConnectionStatus(false);
-        });
-    }
-
-    function setConnectionStatus(isOnline) {
-        $("connection").textContent = isOnline
-            ? "● Онлайн"
-            : "● Офлайн";
-
-        $("connection").style.color = isOnline
-            ? "#6dffa3"
-            : "#ff8b8b";
-    }
-
-    function updatePlayerCount() {
-        $("playerCount").textContent =
-            connected ? remotePlayers.size + 1 : 1;
     }
 
     function draw() {
@@ -552,6 +614,7 @@
         const h = window.innerHeight;
 
         ctx.clearRect(0, 0, w, h);
+
         ctx.fillStyle = "#171f2b";
         ctx.fillRect(0, 0, w, h);
 
@@ -563,23 +626,37 @@
         drawPlayer();
         drawParticles();
         drawMinimap();
+
+        if (player.dead) {
+            ctx.fillStyle = "#080b12b8";
+            ctx.fillRect(0, 0, w, h);
+
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 32px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("ПОРАЖЕНИЕ", w / 2, h / 2);
+        }
     }
 
     function drawWorld() {
         ctx.fillStyle = "#1c2932";
-        ctx.fillRect(-cameraX, -cameraY, WORLD.width, WORLD.height);
+        ctx.fillRect(
+            -cameraX,
+            -cameraY,
+            WORLD.width,
+            WORLD.height
+        );
 
-        const grid = 50;
         ctx.strokeStyle = "#ffffff08";
         ctx.lineWidth = 1;
         ctx.beginPath();
 
-        for (let x = 0; x <= WORLD.width; x += grid) {
+        for (let x = 0; x <= WORLD.width; x += 50) {
             ctx.moveTo(x - cameraX, -cameraY);
             ctx.lineTo(x - cameraX, WORLD.height - cameraY);
         }
 
-        for (let y = 0; y <= WORLD.height; y += grid) {
+        for (let y = 0; y <= WORLD.height; y += 50) {
             ctx.moveTo(-cameraX, y - cameraY);
             ctx.lineTo(WORLD.width - cameraX, y - cameraY);
         }
@@ -702,16 +779,10 @@
         if (
             player.invincible > 0 &&
             Math.floor(performance.now() / 80) % 2
-        ) {
-            return;
-        }
+        ) return;
 
         drawPlayerShape(
-            x,
-            y,
-            player.angle,
-            "#6c8cff",
-            player.radius
+            x, y, player.angle, "#6c8cff", player.radius
         );
 
         ctx.fillStyle = "#ffffff";
@@ -734,11 +805,7 @@
             ) continue;
 
             drawPlayerShape(
-                x,
-                y,
-                p.angle || 0,
-                "#46e7d1",
-                15
+                x, y, p.angle || 0, "#46e7d1", 15
             );
 
             ctx.fillStyle = "#d6fff9";
@@ -806,8 +873,7 @@
             ctx.fillRect(
                 x + p.x / WORLD.width * size - 2,
                 y + p.y / WORLD.height * size - 2,
-                4,
-                4
+                4, 4
             );
         }
 
@@ -816,9 +882,7 @@
         ctx.arc(
             x + player.x / WORLD.width * size,
             y + player.y / WORLD.height * size,
-            3,
-            0,
-            Math.PI * 2
+            3, 0, Math.PI * 2
         );
         ctx.fill();
     }
@@ -848,6 +912,7 @@
 
     function renderShop() {
         $("shopCoins").textContent = `Монеты: ${player.coins}`;
+
         const items = $("shopItems");
         items.innerHTML = "";
 
@@ -882,21 +947,20 @@
             button.onclick = () => {
                 if (weapon.owned) {
                     player.weapon = key;
-                    player.ammo = weapon.ammo;
-                    player.maxAmmo = weapon.ammo;
-                    player.reloading = false;
-                    showMessage(`Оружие: ${weapon.name}`);
                 } else if (player.coins >= weapon.cost) {
                     player.coins -= weapon.cost;
                     weapon.owned = true;
                     player.weapon = key;
-                    player.ammo = weapon.ammo;
-                    player.maxAmmo = weapon.ammo;
-                    showMessage(`Куплено: ${weapon.name}`);
                 } else {
                     showMessage("Недостаточно монет!");
+                    return;
                 }
 
+                player.ammo = weapon.ammo;
+                player.maxAmmo = weapon.ammo;
+                player.reloading = false;
+
+                showMessage(`Оружие: ${weapon.name}`);
                 updateHUD();
                 renderShop();
             };
@@ -965,10 +1029,147 @@
         $("shop").classList.add("hidden");
     }
 
+    function sendServer(data) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(data));
+        }
+    }
+
+    function setConnectionStatus(isOnline) {
+        $("connection").textContent = isOnline
+            ? "● Онлайн"
+            : "● Офлайн";
+
+        $("connection").style.color = isOnline
+            ? "#6dffa3"
+            : "#ff8b8b";
+    }
+
+    function updatePlayerCount() {
+        $("playerCount").textContent =
+            connected ? remotePlayers.size + 1 : 1;
+    }
+
+    function connectServer() {
+        if (socket && (
+            socket.readyState === WebSocket.OPEN ||
+            socket.readyState === WebSocket.CONNECTING
+        )) return;
+
+        $("connection").textContent = "● Подключение...";
+        $("connection").style.color = "#ffcf6b";
+
+        try {
+            socket = new WebSocket(SERVER_URL);
+        } catch (error) {
+            connected = false;
+            setConnectionStatus(false);
+            showMessage("Не удалось создать подключение");
+            return;
+        }
+
+        socket.addEventListener("open", () => {
+            connected = true;
+            setConnectionStatus(true);
+
+            sendServer({
+                type: "join",
+                name: player.name
+            });
+
+            sendServer({
+                type: "move",
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                health: player.health,
+                weapon: player.weapon
+            });
+
+            updatePlayerCount();
+            showMessage("Подключено к серверу!");
+        });
+
+        socket.addEventListener("message", event => {
+            let data;
+
+            try {
+                data = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+
+            switch (data.type) {
+                case "welcome":
+                    player.id = data.id;
+
+                    if (data.world) {
+                        WORLD.width = data.world.width || WORLD.width;
+                        WORLD.height = data.world.height || WORLD.height;
+                    }
+
+                    remotePlayers.clear();
+
+                    for (const p of data.players || []) {
+                        if (p.id !== player.id) {
+                            remotePlayers.set(p.id, p);
+                        }
+                    }
+
+                    updatePlayerCount();
+                    break;
+
+                case "joined":
+                    player.id = data.id;
+                    break;
+
+                case "playerJoined":
+                case "playerUpdated":
+                case "playerMoved":
+                    if (data.player && data.player.id !== player.id) {
+                        remotePlayers.set(data.player.id, data.player);
+                    }
+
+                    updatePlayerCount();
+                    break;
+
+                case "playerLeft":
+                    remotePlayers.delete(data.id);
+                    updatePlayerCount();
+                    break;
+
+                case "playerCount":
+                    $("playerCount").textContent = data.count;
+                    break;
+
+                case "error":
+                    showMessage(data.message || "Ошибка сервера");
+                    break;
+            }
+        });
+
+        socket.addEventListener("close", () => {
+            connected = false;
+            setConnectionStatus(false);
+            remotePlayers.clear();
+            updatePlayerCount();
+
+            if (gameStarted) {
+                showMessage("Связь с сервером потеряна");
+            }
+        });
+
+        socket.addEventListener("error", () => {
+            connected = false;
+            setConnectionStatus(false);
+        });
+    }
+
     function startGame() {
         if (gameStarted && !player.dead) return;
 
-        player.name = $("playerName").value.trim().slice(0, 16) || "Игрок";
+        player.name =
+            $("playerName").value.trim().slice(0, 16) || "Игрок";
 
         if (player.dead) {
             player.x = WORLD.width / 2;
@@ -1001,27 +1202,17 @@
         shoot();
     });
 
-    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    for (const name of [
+        "pointerup",
+        "pointercancel",
+        "lostpointercapture"
+    ]) {
         $("shootButton").addEventListener(name, () => {
             shooting = false;
         });
     }
 
-    $("reloadButton").addEventListener("click", () => {
-        if (
-            player.reloading ||
-            player.ammo >= weapons[player.weapon].ammo
-        ) return;
-
-        player.reloading = true;
-        updateHUD();
-
-        setTimeout(() => {
-            player.ammo = weapons[player.weapon].ammo;
-            player.reloading = false;
-            updateHUD();
-        }, 1000);
-    });
+    $("reloadButton").addEventListener("click", reload);
 
     const joystick = $("joystick");
     const stick = $("stick");
@@ -1071,43 +1262,44 @@
 
     joystick.addEventListener("pointerup", stopStick);
     joystick.addEventListener("pointercancel", stopStick);
-    window.addEventListener("blur", () => stopStick());
+
+    window.addEventListener("blur", () => {
+        stopStick();
+        shooting = false;
+        keys = {};
+    });
 
     canvas.addEventListener("pointerdown", event => {
         if (!gameStarted || player.dead) return;
 
-        const x = event.clientX + cameraX;
-        const y = event.clientY + cameraY;
-
-        player.angle = Math.atan2(y - player.y, x - player.x);
+        player.angle = Math.atan2(
+            event.clientY + cameraY - player.y,
+            event.clientX + cameraX - player.x
+        );
     });
 
     canvas.addEventListener("pointermove", event => {
         if (!gameStarted || player.dead) return;
 
-        const x = event.clientX + cameraX;
-        const y = event.clientY + cameraY;
-
-        player.angle = Math.atan2(y - player.y, x - player.x);
+        player.angle = Math.atan2(
+            event.clientY + cameraY - player.y,
+            event.clientX + cameraX - player.x
+        );
     });
 
     window.addEventListener("keydown", event => {
-        keys[event.key.toLowerCase()] = true;
+        const key = event.key.toLowerCase();
+        keys[key] = true;
 
         if (
             ["arrowup", "arrowdown", "arrowleft", "arrowright", " "]
-                .includes(event.key.toLowerCase())
+                .includes(key)
         ) {
             event.preventDefault();
         }
 
-        if (event.key.toLowerCase() === "r") {
-            $("reloadButton").click();
-        }
-
-        if (event.key.toLowerCase() === "e") {
-            useSuper();
-        }
+        if (key === "r") reload();
+        if (key === "e") useSuper();
     });
 
     window.addEventListener("keyup", event => {
@@ -1127,5 +1319,9 @@
     makeWorld();
     renderShop();
     updateHUD();
+    updateCamera();
+    setConnectionStatus(false);
+    updatePlayerCount();
+
     requestAnimationFrame(loop);
 })();
