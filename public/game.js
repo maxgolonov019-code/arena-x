@@ -1,72 +1,53 @@
 (() => {
     "use strict";
 
-    // ==============================
-    // НАСТРОЙКИ
-    // ==============================
-
     const CONFIG = {
-        speed: 5,
+        serverUrl: "",
+        moveSpeed: 5,
         mouseSensitivity: 0.004,
-        attackCooldown: 550,
-        reconnectDelay: 2500
+        touchSensitivity: 0.006,
+        attackDistance: 3,
+        attackCooldown: 500
+    };
+
+    const state = {
+        started: false,
+        connected: false,
+        socket: null,
+        myId: null,
+        name: "",
+        health: 100,
+        maxHealth: 100,
+        level: 1,
+        coins: 0,
+        xp: 0,
+        damage: 10,
+        speed: CONFIG.moveSpeed,
+        lastAttack: 0,
+        yaw: 0,
+        pitch: 0,
+        moveX: 0,
+        moveZ: 0,
+        players: new Map(),
+        keys: {},
+        joystickActive: false,
+        lookActive: false,
+        lastTouchX: 0,
+        lastTouchY: 0
     };
 
     let scene;
     let camera;
     let renderer;
     let clock;
-    let socket = null;
+    let ground;
+    let playerBody;
+    let animationId;
 
-    let myId = null;
-    let playerName = "Player";
+    const $ = (id) => document.getElementById(id);
 
-    let gameStarted = false;
-    let connected = false;
-    let connecting = false;
-
-    let health = 100;
-    let coins = 0;
-    let xp = 0;
-    let level = 1;
-
-    let damageLevel = 0;
-    let healthLevel = 0;
-    let speedLevel = 0;
-
-    let lastAttack = 0;
-    let reconnectTimer = null;
-
-    let yaw = 0;
-    let pitch = 0;
-
-    const players = new Map();
-    const keys = {};
-
-    const movement = {
-        x: 0,
-        z: 0,
-        joystickX: 0,
-        joystickY: 0
-    };
-
-    const look = {
-        active: false,
-        pointerId: null,
-        lastX: 0,
-        lastY: 0
-    };
-
-    // ==============================
-    // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-    // ==============================
-
-    function el(id) {
-        return document.getElementById(id);
-    }
-
-    function makeElement(tag, id, parent = document.body) {
-        let element = el(id);
+    function createElement(tag, id, parent = document.body) {
+        let element = $(id);
 
         if (!element) {
             element = document.createElement(tag);
@@ -77,102 +58,21 @@
         return element;
     }
 
-    function send(data) {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-            return false;
-        }
+    function addStyles() {
+        if ($("gameStyles")) return;
 
-        try {
-            socket.send(JSON.stringify(data));
-            return true;
-        } catch (error) {
-            console.error("Ошибка отправки:", error);
-            return false;
-        }
-    }
-
-    function setText(id, value) {
-        const element = el(id);
-
-        if (element) {
-            element.textContent = String(value);
-        }
-    }
-
-    function showMessage(message) {
-        const box = el("statusMessage");
-
-        if (box) {
-            box.textContent = message;
-            box.style.display = "block";
-
-            clearTimeout(showMessage.timer);
-
-            showMessage.timer = setTimeout(() => {
-                box.style.display = "none";
-            }, 2600);
-        }
-
-        console.log("[Игра]", message);
-    }
-
-    function setConnectionStatus(message) {
-        setText("connectionStatus", message);
-        setText("menuConnection", message);
-    }
-
-    function hideElement(id) {
-        const element = el(id);
-
-        if (element) {
-            element.style.display = "none";
-        }
-    }
-
-    function showElement(id, display = "block") {
-        const element = el(id);
-
-        if (element) {
-            element.style.display = display;
-        }
-    }
-
-    // ==============================
-    // СТИЛИ И ИНТЕРФЕЙС
-    // ==============================
-
-    function createInterface() {
-        const style = makeElement("style", "gameStyles", document.head);
+        const style = document.createElement("style");
+        style.id = "gameStyles";
 
         style.textContent = `
-            * {
-                box-sizing: border-box;
-            }
-
-            html, body {
-                margin: 0;
-                width: 100%;
-                height: 100%;
-                overflow: hidden;
-                font-family: Arial, sans-serif;
-                background: #10131b;
-                color: white;
-                touch-action: none;
-            }
-
-            #gameCanvas {
-                position: fixed;
-                inset: 0;
-                width: 100%;
-                height: 100%;
-                display: block;
-            }
-
             #gameUI {
                 position: fixed;
                 inset: 0;
                 z-index: 5;
                 pointer-events: none;
+                color: white;
+                font-family: Arial, sans-serif;
+                user-select: none;
             }
 
             #gameTop {
@@ -181,63 +81,73 @@
                 left: 12px;
                 right: 12px;
                 display: flex;
+                align-items: flex-start;
                 justify-content: space-between;
                 gap: 10px;
             }
 
             #gameStats {
-                background: #10131bd9;
-                border: 1px solid #ffffff25;
-                border-radius: 12px;
                 padding: 10px;
-                min-width: 155px;
+                border-radius: 12px;
+                background: #10131cce;
+                min-width: 150px;
                 font-size: 13px;
-                line-height: 1.7;
             }
 
             #healthTrack {
                 height: 9px;
-                width: 145px;
-                max-width: 45vw;
-                background: #414653;
+                margin: 6px 0;
                 border-radius: 8px;
                 overflow: hidden;
+                background: #444;
             }
 
             #healthBar {
                 width: 100%;
                 height: 100%;
-                background: #43df7b;
+                background: #35dc75;
+                transition: width 0.15s;
             }
 
             #connectionStatus {
-                height: fit-content;
-                background: #10131bd9;
-                border-radius: 9px;
-                padding: 9px;
-                font-size: 12px;
-                max-width: 45%;
+                margin-top: 6px;
+                color: #ffd166;
+                font-size: 11px;
+            }
+
+            #shopButton,
+            .gameButton {
+                border: 0;
+                border-radius: 10px;
+                padding: 11px 15px;
+                color: white;
+                background: #596cff;
+                font-weight: bold;
+            }
+
+            #shopButton {
+                pointer-events: auto;
             }
 
             #lookZone {
                 position: absolute;
                 right: 0;
-                top: 25%;
+                top: 0;
                 width: 65%;
-                height: 55%;
+                height: 100%;
                 pointer-events: auto;
                 touch-action: none;
             }
 
             #joystick {
                 position: absolute;
-                bottom: 24px;
-                left: 22px;
+                left: 24px;
+                bottom: 28px;
                 width: 120px;
                 height: 120px;
                 border-radius: 50%;
-                background: #ffffff20;
-                border: 2px solid #ffffff65;
+                border: 2px solid #ffffff80;
+                background: #11182788;
                 pointer-events: auto;
                 touch-action: none;
             }
@@ -248,246 +158,327 @@
                 top: 50%;
                 width: 48px;
                 height: 48px;
-                margin: -24px;
                 border-radius: 50%;
-                background: #91a8ffcc;
+                background: #aebcffdd;
                 border: 2px solid white;
-                pointer-events: none;
-            }
-
-            .gameButton {
-                border: 1px solid #ffffff45;
-                color: white;
-                background: #526ff2e8;
-                border-radius: 13px;
-                padding: 12px 15px;
-                font-weight: bold;
-                cursor: pointer;
-                pointer-events: auto;
-                touch-action: manipulation;
+                transform: translate(-50%, -50%);
             }
 
             #attackButton {
                 position: absolute;
-                right: 22px;
-                bottom: 32px;
+                right: 25px;
+                bottom: 35px;
                 width: 82px;
                 height: 82px;
+                border: 2px solid #ffffffbb;
                 border-radius: 50%;
-                background: #e84b5b;
-            }
-
-            #shopButton {
-                position: absolute;
-                right: 18px;
-                top: 90px;
+                background: #ed4755dd;
+                color: white;
+                font-size: 15px;
+                font-weight: bold;
+                pointer-events: auto;
+                touch-action: none;
             }
 
             #statusMessage {
-                display: none;
                 position: absolute;
+                top: 100px;
                 left: 50%;
-                top: 20%;
                 transform: translateX(-50%);
-                background: #151925ed;
-                border: 1px solid #ffffff35;
-                border-radius: 12px;
-                padding: 12px 18px;
+                padding: 9px 14px;
+                border-radius: 9px;
+                background: #10131cbb;
                 text-align: center;
-                max-width: 85%;
+                max-width: 90%;
             }
 
-            #gameMenu, #shopPanel {
+            #gameMenu {
                 position: fixed;
                 inset: 0;
                 z-index: 20;
                 display: flex;
-                flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                gap: 14px;
-                padding: 24px;
-                background: linear-gradient(145deg, #11172bf5, #202e50f5);
+                padding: 20px;
+                background:
+                    radial-gradient(circle at top, #303d78, transparent 60%),
+                    #10131c;
+                color: white;
+                font-family: Arial, sans-serif;
+            }
+
+            #menuCard {
+                width: 100%;
+                max-width: 360px;
+                padding: 25px;
+                border: 1px solid #ffffff25;
+                border-radius: 20px;
+                background: #171c2bed;
+                box-shadow: 0 15px 50px #0008;
                 text-align: center;
-                pointer-events: auto;
-                touch-action: manipulation;
             }
 
-            #gameMenu h1 {
-                margin: 0;
-                font-size: clamp(30px, 8vw, 52px);
-                color: #9db0ff;
+            #menuCard h1 {
+                margin: 0 0 10px;
+                font-size: 28px;
             }
 
-            #gameMenu p {
-                color: #c5cce0;
-                max-width: 350px;
+            #menuCard p {
+                color: #c5cbe0;
                 line-height: 1.5;
             }
 
             #playerNameInput {
-                width: min(300px, 90%);
-                padding: 14px;
+                display: block;
+                width: 100%;
+                margin: 18px 0 12px;
+                padding: 13px;
+                border: 1px solid #596cff;
                 border-radius: 10px;
-                border: 1px solid #7587bd;
-                background: #101625;
+                outline: none;
+                background: #0d1120;
                 color: white;
                 font-size: 16px;
-                touch-action: manipulation;
             }
 
             #playButton {
-                min-width: 180px;
-                padding: 15px 25px;
-                border: none;
-                border-radius: 12px;
-                background: #667ff5;
+                width: 100%;
+                padding: 14px;
+                border: 0;
+                border-radius: 10px;
+                background: #596cff;
                 color: white;
-                font-size: 17px;
                 font-weight: bold;
-                cursor: pointer;
+                font-size: 16px;
+            }
+
+            #menuConnection {
+                margin-top: 12px;
+                color: #ffd166;
+                font-size: 12px;
             }
 
             #shopPanel {
-                display: none;
-                z-index: 30;
-                background: #111725f5;
+                position: absolute;
+                z-index: 10;
+                top: 50%;
+                left: 50%;
+                width: min(330px, calc(100% - 32px));
+                padding: 20px;
+                transform: translate(-50%, -50%);
+                border: 1px solid #ffffff30;
+                border-radius: 16px;
+                background: #171c2bf5;
+                pointer-events: auto;
+            }
+
+            #shopPanel h2 {
+                margin-top: 0;
             }
 
             .shopItem {
-                width: min(320px, 95%);
-                padding: 12px;
-                border: 1px solid #ffffff25;
-                border-radius: 12px;
-                background: #ffffff0c;
                 display: flex;
-                justify-content: space-between;
                 align-items: center;
-                gap: 12px;
+                justify-content: space-between;
+                gap: 8px;
+                margin: 10px 0;
+                padding: 10px;
+                border-radius: 10px;
+                background: #ffffff0d;
+            }
+
+            .shopItem button {
+                padding: 8px 10px;
+                border: 0;
+                border-radius: 8px;
+                background: #596cff;
+                color: white;
+            }
+
+            #closeShop {
+                width: 100%;
+                margin-top: 8px;
+                padding: 10px;
+                border: 0;
+                border-radius: 8px;
+                background: #394052;
+                color: white;
             }
 
             @media (max-width: 420px) {
                 #gameStats {
-                    min-width: 140px;
+                    min-width: 135px;
                     font-size: 12px;
-                    padding: 8px;
-                }
-
-                #healthTrack {
-                    width: 125px;
                 }
 
                 #joystick {
-                    width: 110px;
-                    height: 110px;
-                    left: 15px;
-                    bottom: 18px;
+                    left: 18px;
+                    bottom: 24px;
+                    width: 108px;
+                    height: 108px;
                 }
 
                 #attackButton {
-                    right: 16px;
-                    bottom: 25px;
-                    width: 75px;
-                    height: 75px;
+                    right: 18px;
+                    bottom: 28px;
+                    width: 72px;
+                    height: 72px;
                 }
             }
         `;
 
-        const ui = makeElement("div", "gameUI");
+        document.head.appendChild(style);
+    }
 
+    function createInterface() {
+        addStyles();
+
+        const ui = createElement("div", "gameUI");
         ui.innerHTML = `
             <div id="gameTop">
                 <div id="gameStats">
-                    <div id="healthText">❤️ 100 / 100</div>
+                    <div id="healthText">Здоровье: 100/100</div>
                     <div id="healthTrack">
                         <div id="healthBar"></div>
                     </div>
                     <div id="levelText">Уровень: 1</div>
                     <div id="coinsText">Монеты: 0</div>
                     <div id="xpText">Опыт: 0</div>
+                    <div id="connectionStatus">Нет подключения</div>
                 </div>
 
-                <div id="connectionStatus">Не подключено</div>
+                <button id="shopButton">Магазин</button>
             </div>
 
-            <button id="shopButton" class="gameButton">
-                🛒 Магазин
-            </button>
-
+            <div id="statusMessage">Добро пожаловать!</div>
             <div id="lookZone"></div>
 
             <div id="joystick">
                 <div id="joystickStick"></div>
             </div>
 
-            <button id="attackButton" class="gameButton">
-                АТАКА
-            </button>
+            <button id="attackButton">АТАКА</button>
 
-            <div id="statusMessage"></div>
+            <div id="shopPanel" style="display:none">
+                <h2>Магазин</h2>
+                <p>Монеты: <b id="shopCoins">0</b></p>
+
+                <div class="shopItem">
+                    <span>Урон +5</span>
+                    <button id="buyDamage">Купить · 20</button>
+                </div>
+
+                <div class="shopItem">
+                    <span>Здоровье +25</span>
+                    <button id="buyHealth">Купить · 15</button>
+                </div>
+
+                <div class="shopItem">
+                    <span>Скорость +1</span>
+                    <button id="buySpeed">Купить · 25</button>
+                </div>
+
+                <button id="closeShop">Закрыть</button>
+            </div>
         `;
 
-        // Меню не удаляем, если оно уже есть в HTML.
-        const menu = makeElement("div", "gameMenu");
+        const menu = createElement("div", "gameMenu");
 
-        if (!menu.querySelector("h1")) {
-            const title = document.createElement("h1");
-            title.textContent = "MULTIPLAYER";
-            menu.appendChild(title);
-        }
+        menu.innerHTML = `
+            <div id="menuCard">
+                <h1>3D Multiplayer</h1>
+                <p>Введи имя и заходи в игровой мир.</p>
+                <input
+                    id="playerNameInput"
+                    type="text"
+                    maxlength="20"
+                    placeholder="Твоё имя"
+                    autocomplete="nickname"
+                >
+                <button id="playButton">ИГРАТЬ</button>
+                <div id="menuConnection">
+                    Подготовка игры...
+                </div>
+            </div>
+        `;
 
-        if (!menu.querySelector("p")) {
-            const description = document.createElement("p");
-            description.textContent =
-                "Введи имя игрока и нажми «Играть».";
-            menu.appendChild(description);
-        }
-
-        let input = el("playerNameInput");
-
-        if (!input) {
-            input = document.createElement("input");
-            input.id = "playerNameInput";
-            input.type = "text";
-            input.placeholder = "Имя игрока";
-            input.maxLength = 20;
-            menu.appendChild(input);
-        }
-
-        let button = el("playButton");
-
-        if (!button) {
-            button = document.createElement("button");
-            button.id = "playButton";
-            button.textContent = "Играть";
-            menu.appendChild(button);
-        }
-
-        if (!el("menuConnection")) {
-            const status = document.createElement("div");
-            status.id = "menuConnection";
-            status.textContent = "Готово к запуску";
-            menu.appendChild(status);
-        }
-
+        $("shopPanel").style.display = "none";
         menu.style.display = "flex";
-
-        // Магазин создадим отдельно во второй части.
     }
 
-    // ==============================
-    // СОЗДАНИЕ 3D-МИРА
-    // ==============================
+    function showMessage(message, duration = 2200) {
+        const element = $("statusMessage");
+
+        if (!element) return;
+
+        element.textContent = message;
+        element.style.display = "block";
+
+        clearTimeout(showMessage.timer);
+
+        showMessage.timer = setTimeout(() => {
+            if (element) {
+                element.style.display = "none";
+            }
+        }, duration);
+    }
+
+    function updateInterface() {
+        if ($("healthText")) {
+            $("healthText").textContent =
+                `Здоровье: ${state.health}/${state.maxHealth}`;
+        }
+
+        if ($("healthBar")) {
+            const percent = state.maxHealth > 0
+                ? Math.max(0, state.health / state.maxHealth * 100)
+                : 0;
+
+            $("healthBar").style.width = `${percent}%`;
+
+            $("healthBar").style.background =
+                percent > 50 ? "#35dc75" :
+                percent > 25 ? "#ffd166" : "#ff4757";
+        }
+
+        if ($("levelText")) {
+            $("levelText").textContent = `Уровень: ${state.level}`;
+        }
+
+        if ($("coinsText")) {
+            $("coinsText").textContent = `Монеты: ${state.coins}`;
+        }
+
+        if ($("xpText")) {
+            $("xpText").textContent = `Опыт: ${state.xp}`;
+        }
+
+        if ($("shopCoins")) {
+            $("shopCoins").textContent = state.coins;
+        }
+
+        const connectionText = state.connected
+            ? "Подключено"
+            : "Нет подключения к серверу";
+
+        if ($("connectionStatus")) {
+            $("connectionStatus").textContent = connectionText;
+        }
+
+        if ($("menuConnection") && !state.started) {
+            $("menuConnection").textContent = connectionText;
+        }
+    }
 
     function createWorld() {
         if (typeof THREE === "undefined") {
-            showMessage("Three.js не загружен!");
+            showMessage("Не удалось загрузить Three.js", 5000);
             return false;
         }
 
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x111827);
-        scene.fog = new THREE.Fog(0x111827, 25, 110);
+        scene.background = new THREE.Color(0x9bb8d8);
+        scene.fog = new THREE.Fog(0x9bb8d8, 25, 100);
 
         camera = new THREE.PerspectiveCamera(
             75,
@@ -495,6 +486,9 @@
             0.1,
             500
         );
+
+        camera.position.set(0, 1.65, 5);
+        camera.rotation.order = "YXZ";
 
         renderer = new THREE.WebGLRenderer({
             antialias: true,
@@ -511,154 +505,144 @@
         );
 
         renderer.domElement.id = "gameCanvas";
-
         document.body.insertBefore(
             renderer.domElement,
             document.body.firstChild
         );
 
-        clock = new THREE.Clock();
-
-        scene.add(new THREE.HemisphereLight(
-            0xb7caff,
-            0x303344,
+        const ambient = new THREE.HemisphereLight(
+            0xdceaff,
+            0x424b36,
             2
-        ));
-
-        const light = new THREE.DirectionalLight(0xffffff, 1.7);
-        light.position.set(15, 30, 10);
-        scene.add(light);
-
-        const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(250, 250),
-            new THREE.MeshStandardMaterial({
-                color: 0x343b48,
-                roughness: 0.95
-            })
         );
 
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -0.06;
-        scene.add(ground);
+        scene.add(ambient);
 
-        const roadMaterial = new THREE.MeshStandardMaterial({
-            color: 0x20242c,
+        const sunlight = new THREE.DirectionalLight(
+            0xffffff,
+            1.5
+        );
+
+        sunlight.position.set(20, 30, 10);
+        scene.add(sunlight);
+
+        const groundGeometry = new THREE.PlaneGeometry(200, 200);
+
+        const groundMaterial = new THREE.MeshStandardMaterial({
+            color: 0x507b48,
             roughness: 1
         });
 
-        function addRoad(x, z, width, length) {
-            const road = new THREE.Mesh(
-                new THREE.BoxGeometry(width, 0.04, length),
-                roadMaterial
-            );
+        ground = new THREE.Mesh(
+            groundGeometry,
+            groundMaterial
+        );
 
-            road.position.set(x, 0, z);
-            scene.add(road);
-        }
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = 0;
+        scene.add(ground);
 
-        addRoad(0, 0, 13, 250);
-        addRoad(0, 0, 250, 13);
+        createBuildings();
 
-        const lineMaterial = new THREE.MeshBasicMaterial({
-            color: 0xf0d879
-        });
-
-        for (let i = -110; i <= 110; i += 10) {
-            const line = new THREE.Mesh(
-                new THREE.BoxGeometry(0.18, 0.045, 4),
-                lineMaterial
-            );
-
-            line.position.set(0, 0.04, i);
-            scene.add(line);
-
-            const line2 = new THREE.Mesh(
-                new THREE.BoxGeometry(4, 0.045, 0.18),
-                lineMaterial
-            );
-
-            line2.position.set(i, 0.04, 0);
-            scene.add(line2);
-        }
-
-        const buildingColors = [
-            0x596579,
-            0x6b6076,
-            0x4d6973,
-            0x77716a,
-            0x49566b
-        ];
-
-        for (let x = -90; x <= 90; x += 18) {
-            for (let z = -90; z <= 90; z += 18) {
-                if (Math.abs(x) < 13 || Math.abs(z) < 13) {
-                    continue;
-                }
-
-                const height = 5 + Math.random() * 15;
-
-                const building = new THREE.Mesh(
-                    new THREE.BoxGeometry(
-                        7 + Math.random() * 3,
-                        height,
-                        7 + Math.random() * 3
-                    ),
-                    new THREE.MeshStandardMaterial({
-                        color: buildingColors[
-                            Math.floor(Math.random() * buildingColors.length)
-                        ],
-                        roughness: 0.85
-                    })
-                );
-
-                building.position.set(
-                    x + (Math.random() - 0.5) * 3,
-                    height / 2,
-                    z + (Math.random() - 0.5) * 3
-                );
-
-                scene.add(building);
-            }
-        }
-
-        camera.position.set(0, 4, 8);
+        clock = new THREE.Clock();
 
         return true;
     }
-       // ==============================
-    // МОДЕЛИ ИГРОКОВ
-    // ==============================
 
-    function createPlayerModel(color = 0x6688ff) {
+    function createBuildings() {
+        const materials = [
+            new THREE.MeshStandardMaterial({ color: 0x858b98 }),
+            new THREE.MeshStandardMaterial({ color: 0xb5a28b }),
+            new THREE.MeshStandardMaterial({ color: 0x747e91 }),
+            new THREE.MeshStandardMaterial({ color: 0xc1c7cf })
+        ];
+
+        for (let i = 0; i < 32; i++) {
+            const width = 3 + Math.random() * 5;
+            const depth = 3 + Math.random() * 5;
+            const height = 4 + Math.random() * 15;
+
+            const geometry = new THREE.BoxGeometry(
+                width,
+                height,
+                depth
+            );
+
+            const building = new THREE.Mesh(
+                geometry,
+                materials[i % materials.length]
+            );
+
+            const angle = i / 32 * Math.PI * 2;
+            const radius = 17 + Math.random() * 22;
+
+            building.position.set(
+                Math.cos(angle) * radius,
+                height / 2,
+                Math.sin(angle) * radius
+            );
+
+            scene.add(building);
+
+            const windowMaterial = new THREE.MeshStandardMaterial({
+                color: 0xffdf91,
+                emissive: 0x55401c
+            });
+
+            for (let floor = 1; floor < height / 2; floor++) {
+                for (let column = 0; column < 2; column++) {
+                    const windowMesh = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.45, 0.55, 0.06),
+                        windowMaterial
+                    );
+
+                    windowMesh.position.set(
+                        building.position.x +
+                            (column === 0 ? -width * 0.22 : width * 0.22),
+                        floor * 1.5,
+                        building.position.z + depth / 2 + 0.04
+                    );
+
+                    scene.add(windowMesh);
+                }
+            }
+        }
+        }
+        function createPlayerModel(color = 0x4f79ff) {
         const group = new THREE.Group();
 
+        const material = new THREE.MeshStandardMaterial({
+            color,
+            roughness: 0.8
+        });
+
         const body = new THREE.Mesh(
-            new THREE.BoxGeometry(0.8, 1.2, 0.45),
-            new THREE.MeshStandardMaterial({ color })
+            new THREE.BoxGeometry(0.65, 1.1, 0.35),
+            material
         );
 
-        body.position.y = 1.2;
+        body.position.y = 0.85;
         group.add(body);
 
         const head = new THREE.Mesh(
-            new THREE.SphereGeometry(0.34, 12, 10),
+            new THREE.SphereGeometry(0.25, 12, 10),
             new THREE.MeshStandardMaterial({ color: 0xf0c7a0 })
         );
 
-        head.position.y = 2.05;
+        head.position.y = 1.55;
         group.add(head);
 
         const legsMaterial = new THREE.MeshStandardMaterial({
-            color: 0x252d43
+            color: 0x29334d
         });
 
-        for (const side of [-1, 1]) {
+        for (const x of [-0.18, 0.18]) {
             const leg = new THREE.Mesh(
-                new THREE.BoxGeometry(0.27, 0.75, 0.3),
+                new THREE.BoxGeometry(0.2, 0.55, 0.22),
                 legsMaterial
             );
 
-            leg.position.set(side * 0.22, 0.38, 0);
+            leg.position.set(x, 0.28, 0);
             group.add(leg);
         }
 
@@ -666,621 +650,624 @@
     }
 
     function addPlayer(id, data = {}) {
-        id = String(id);
+        if (!scene || id == null) return;
 
-        if (players.has(id)) {
-            return players.get(id);
+        if (String(id) === String(state.myId)) return;
+
+        if (state.players.has(String(id))) {
+            updatePlayer(id, data);
+            return;
         }
 
-        const model = createPlayerModel(
-            id === String(myId) ? 0x6688ff : 0xff626c
+        const model = createPlayerModel(0xff665c);
+
+        model.position.set(
+            Number(data.x) || 0,
+            0,
+            Number(data.z) || 0
         );
 
         scene.add(model);
 
-        const player = {
-            id,
+        state.players.set(String(id), {
             model,
             name: data.name || "Игрок",
-            x: Number(data.x) || 0,
-            y: Number(data.y) || 0,
-            z: Number(data.z) || 0,
-            yaw: Number(data.yaw) || 0,
-            targetX: Number(data.x) || 0,
-            targetZ: Number(data.z) || 0
-        };
-
-        model.position.set(player.x, player.y, player.z);
-        players.set(id, player);
-
-        return player;
+            health: data.health ?? 100
+        });
     }
 
-    function removePlayer(id) {
-        const player = players.get(String(id));
+    function updatePlayer(id, data = {}) {
+        const player = state.players.get(String(id));
 
         if (!player) {
+            addPlayer(id, data);
             return;
         }
-
-        scene.remove(player.model);
-
-        player.model.traverse(object => {
-            if (object.geometry) {
-                object.geometry.dispose();
-            }
-
-            if (object.material) {
-                object.material.dispose();
-            }
-        });
-
-        players.delete(String(id));
-    }
-
-    function updatePlayerData(data) {
-        if (!data || typeof data !== "object") {
-            return;
-        }
-
-        const id = data.id ?? data.playerId;
-
-        if (id === undefined || id === null) {
-            return;
-        }
-
-        const player = addPlayer(String(id), data);
 
         if (Number.isFinite(Number(data.x))) {
-            player.targetX = Number(data.x);
+            player.model.position.x = Number(data.x);
         }
 
         if (Number.isFinite(Number(data.z))) {
-            player.targetZ = Number(data.z);
+            player.model.position.z = Number(data.z);
         }
 
-        if (Number.isFinite(Number(data.y))) {
-            player.y = Number(data.y);
-        }
-
-        if (Number.isFinite(Number(data.yaw))) {
-            player.yaw = Number(data.yaw);
+        if (Number.isFinite(Number(data.rotation))) {
+            player.model.rotation.y = Number(data.rotation);
         }
 
         if (data.name) {
-            player.name = String(data.name);
+            player.name = data.name;
         }
 
-        if (player.id === String(myId)) {
-            if (data.health !== undefined) {
-                health = Number(data.health);
-            }
-
-            if (data.coins !== undefined) {
-                coins = Number(data.coins);
-            }
-
-            if (data.xp !== undefined) {
-                xp = Number(data.xp);
-            }
-
-            if (data.level !== undefined) {
-                level = Number(data.level);
-            }
-
-            updateStats();
+        if (data.health !== undefined) {
+            player.health = Number(data.health) || 0;
         }
     }
 
-    // ==============================
-    // СТАТИСТИКА
-    // ==============================
+    function removePlayer(id) {
+        const key = String(id);
+        const player = state.players.get(key);
 
-    function updateStats() {
-        const maxHealth = 100 + healthLevel * 25;
+        if (!player) return;
 
-        setText(
-            "healthText",
-            `❤️ ${Math.max(0, health)} / ${maxHealth}`
-        );
+        scene.remove(player.model);
 
-        setText("levelText", `Уровень: ${level}`);
-        setText("coinsText", `Монеты: ${coins}`);
-        setText("xpText", `Опыт: ${xp}`);
-        setText("shopCoins", `Монеты: ${coins}`);
+        player.model.traverse((object) => {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) {
+                if (Array.isArray(object.material)) {
+                    object.material.forEach(material => material.dispose());
+                } else {
+                    object.material.dispose();
+                }
+            }
+        });
 
-        const bar = el("healthBar");
-
-        if (bar) {
-            const percent = Math.max(
-                0,
-                Math.min(100, health / maxHealth * 100)
-            );
-
-            bar.style.width = percent + "%";
-
-            bar.style.background =
-                percent < 30 ? "#ff485b" :
-                percent < 60 ? "#ffbf48" :
-                "#43df7b";
-        }
+        state.players.delete(key);
     }
 
-    // ==============================
-    // ПОДКЛЮЧЕНИЕ К СЕРВЕРУ
-    // ==============================
+    function sendServer(data) {
+        if (
+            state.socket &&
+            state.socket.readyState === WebSocket.OPEN
+        ) {
+            state.socket.send(JSON.stringify(data));
+            return true;
+        }
 
-    function getWebSocketURL() {
-        const protocol =
-            location.protocol === "https:" ? "wss:" : "ws:";
-
-        return protocol + "//" + location.host;
+        return false;
     }
 
     function connectToServer() {
-        if (
-            connecting ||
-            (socket && socket.readyState === WebSocket.OPEN)
-        ) {
-            return;
-        }
-
-        if (socket) {
+        if (state.socket) {
             try {
-                socket.close();
+                state.socket.close();
             } catch (_) {}
         }
 
-        connecting = true;
-        connected = false;
+        let url = CONFIG.serverUrl.trim();
 
-        setConnectionStatus("Подключение...");
+        if (!url) {
+            const protocol = location.protocol === "https:"
+                ? "wss:"
+                : "ws:";
 
-        const serverMeta = document.querySelector(
-            'meta[name="game-server"]'
-        );
+            url = `${protocol}//${location.host}`;
+        }
 
-        const url = serverMeta && serverMeta.content.trim()
-            ? serverMeta.content.trim()
-            : getWebSocketURL();
+        if (
+            location.protocol === "https:" &&
+            url.startsWith("ws://")
+        ) {
+            showMessage(
+                "Для HTTPS нужен защищённый WebSocket (wss://)",
+                4000
+            );
+            return;
+        }
+
+        let socket;
 
         try {
             socket = new WebSocket(url);
         } catch (error) {
-            connecting = false;
-            setConnectionStatus("Ошибка адреса сервера");
-            showMessage("Не удалось подключиться.");
-            scheduleReconnect();
+            state.connected = false;
+            updateInterface();
+            showMessage("Не удалось создать подключение", 3000);
             return;
         }
 
-        socket.onopen = () => {
-            connecting = false;
-            connected = true;
+        state.socket = socket;
+        state.connected = false;
+        updateInterface();
 
-            setConnectionStatus("Подключено");
+        socket.addEventListener("open", () => {
+            if (state.socket !== socket) return;
 
-            // Отправляем имя игрока при входе.
-            send({
+            state.connected = true;
+            updateInterface();
+
+            sendServer({
                 type: "join",
-                name: playerName
+                name: state.name
             });
 
-            showMessage("Соединение установлено!");
-        };
+            showMessage("Соединение с сервером установлено");
+        });
 
-        socket.onmessage = event => {
+        socket.addEventListener("message", (event) => {
+            if (state.socket !== socket) return;
+
             let data;
 
             try {
                 data = JSON.parse(event.data);
-            } catch (error) {
-                console.warn("Ответ сервера не JSON:", event.data);
+            } catch (_) {
                 return;
             }
 
             handleServerMessage(data);
-        };
+        });
 
-        socket.onerror = error => {
-            console.warn("Ошибка WebSocket:", error);
-            setConnectionStatus("Ошибка соединения");
-        };
+        socket.addEventListener("close", () => {
+            if (state.socket !== socket) return;
 
-        socket.onclose = () => {
-            connected = false;
-            connecting = false;
+            state.connected = false;
+            updateInterface();
 
-            setConnectionStatus("Отключено");
-
-            if (gameStarted) {
-                showMessage("Связь потеряна. Переподключение...");
-                scheduleReconnect();
+            if (state.started) {
+                showMessage("Связь с сервером потеряна", 4000);
             }
-        };
+        });
+
+        socket.addEventListener("error", () => {
+            if (state.socket !== socket) return;
+
+            state.connected = false;
+            updateInterface();
+        });
     }
-
-    function scheduleReconnect() {
-        clearTimeout(reconnectTimer);
-
-        reconnectTimer = setTimeout(() => {
-            if (gameStarted && !connected && !connecting) {
-                connectToServer();
-            }
-        }, CONFIG.reconnectDelay);
-    }
-
-    // ==============================
-    // ОБРАБОТКА СООБЩЕНИЙ СЕРВЕРА
-    // ==============================
 
     function handleServerMessage(data) {
-        if (!data || typeof data !== "object") {
-            return;
-        }
+        if (!data || typeof data !== "object") return;
 
         switch (data.type) {
             case "welcome": {
-                myId = data.id ?? data.playerId ?? myId;
+                if (data.id !== undefined) {
+                    state.myId = data.id;
+                }
 
-                if (myId !== null && myId !== undefined) {
-                    myId = String(myId);
+                if (data.health !== undefined) {
+                    state.health = Number(data.health) || state.health;
+                }
 
-                    addPlayer(myId, {
-                        name: playerName,
-                        x: data.x,
-                        y: data.y,
-                        z: data.z
+                if (data.maxHealth !== undefined) {
+                    state.maxHealth = Number(data.maxHealth) || 100;
+                }
+
+                if (data.level !== undefined) {
+                    state.level = Number(data.level) || 1;
+                }
+
+                if (data.coins !== undefined) {
+                    state.coins = Number(data.coins) || 0;
+                }
+
+                if (data.xp !== undefined) {
+                    state.xp = Number(data.xp) || 0;
+                }
+
+                if (Number.isFinite(Number(data.x))) {
+                    state.position.x = Number(data.x);
+                }
+
+                if (Number.isFinite(Number(data.z))) {
+                    state.position.z = Number(data.z);
+                }
+
+                if (Number.isFinite(Number(data.rotation))) {
+                    state.yaw = Number(data.rotation);
+                }
+
+                updateInterface();
+
+                if (Array.isArray(data.players)) {
+                    data.players.forEach(player => {
+                        if (player.id != null) {
+                            addPlayer(player.id, player);
+                        }
                     });
                 }
 
-                if (data.player) {
-                    updatePlayerData({
-                        ...data.player,
-                        id: data.player.id ?? myId
-                    });
-                }
-
-                showMessage("Добро пожаловать!");
                 break;
             }
 
             case "state":
             case "update": {
-                if (data.players) {
-                    const list = Array.isArray(data.players)
-                        ? data.players
-                        : Object.values(data.players);
-
-                    const seen = new Set();
-
-                    list.forEach(item => {
-                        const id = item.id ?? item.playerId;
-
-                        if (id === undefined || id === null) {
-                            return;
-                        }
-
-                        seen.add(String(id));
-
-                        updatePlayerData({
-                            ...item,
-                            id: String(id)
-                        });
-                    });
-
-                    for (const id of players.keys()) {
-                        if (
-                            id !== String(myId) &&
-                            !seen.has(id)
-                        ) {
-                            removePlayer(id);
-                        }
-                    }
-                }
-
                 if (data.health !== undefined) {
-                    health = Number(data.health);
+                    state.health = Number(data.health) || 0;
                 }
 
-                if (data.coins !== undefined) {
-                    coins = Number(data.coins);
-                }
-
-                if (data.xp !== undefined) {
-                    xp = Number(data.xp);
+                if (data.maxHealth !== undefined) {
+                    state.maxHealth = Number(data.maxHealth) || 100;
                 }
 
                 if (data.level !== undefined) {
-                    level = Number(data.level);
+                    state.level = Number(data.level) || 1;
                 }
 
-                updateStats();
+                if (data.coins !== undefined) {
+                    state.coins = Number(data.coins) || 0;
+                }
+
+                if (data.xp !== undefined) {
+                    state.xp = Number(data.xp) || 0;
+                }
+
+                const players = Array.isArray(data.players)
+                    ? data.players
+                    : data.players && typeof data.players === "object"
+                        ? Object.entries(data.players).map(([id, player]) => ({
+                            id,
+                            ...player
+                        }))
+                        : [];
+
+                players.forEach(player => {
+                    if (player.id == null) return;
+
+                    if (String(player.id) === String(state.myId)) {
+                        if (Number.isFinite(Number(player.x))) {
+                            state.position.x = Number(player.x);
+                        }
+
+                        if (Number.isFinite(Number(player.z))) {
+                            state.position.z = Number(player.z);
+                        }
+
+                        if (Number.isFinite(Number(player.health))) {
+                            state.health = Number(player.health);
+                        }
+
+                        return;
+                    }
+
+                    updatePlayer(player.id, player);
+                });
+
+                updateInterface();
                 break;
             }
 
-            case "playerJoined":
-                updatePlayerData(data.player || data);
-                break;
+            case "playerJoined": {
+                if (data.player && data.player.id != null) {
+                    addPlayer(data.player.id, data.player);
+                } else if (data.id != null) {
+                    addPlayer(data.id, data);
+                }
 
-            case "playerLeft":
-                removePlayer(data.id ?? data.playerId);
                 break;
+            }
 
-            case "damage":
+            case "playerLeft": {
+                if (data.id != null) {
+                    removePlayer(data.id);
+                }
+
+                break;
+            }
+
+            case "damage": {
                 if (data.health !== undefined) {
-                    health = Number(data.health);
-                } else {
-                    health = Math.max(
+                    state.health = Math.max(
                         0,
-                        health - Number(data.amount || 0)
+                        Number(data.health) || 0
                     );
+
+                    updateInterface();
                 }
 
-                updateStats();
+                showMessage(data.message || "Получен урон");
                 break;
+            }
 
-            case "coins":
-                if (data.coins !== undefined) {
-                    coins = Number(data.coins);
-                    updateStats();
+            case "levelUp": {
+                if (data.level !== undefined) {
+                    state.level = Number(data.level) || state.level;
                 }
-                break;
 
-            case "hit":
-                showMessage(data.message || "Попадание!");
+                updateInterface();
+                showMessage("Новый уровень!");
                 break;
+            }
 
-            case "error":
-                showMessage(data.message || "Ошибка сервера.");
+            case "error": {
+                showMessage(data.message || "Ошибка сервера", 4000);
                 break;
+            }
 
-            default:
-                if (data.players) {
-                    handleServerMessage({
-                        type: "state",
-                        players: data.players
-                    });
+            default: {
+                if (data.id != null && data.id !== state.myId) {
+                    updatePlayer(data.id, data);
                 }
+            }
         }
     }
 
-    // ==============================
-    // ЗАПУСК ИГРЫ
-    // ==============================
-
     function startGame() {
-        if (gameStarted) {
+        if (state.started) return;
+
+        const input = $("playerNameInput");
+        const name = input ? input.value.trim() : "";
+
+        if (!name) {
+            showMessage("Сначала введи имя", 2500);
+
+            if (input) input.focus();
+
             return;
         }
 
-        const input =
-            el("playerNameInput") ||
-            el("nameInput") ||
-            el("playerName") ||
-            document.querySelector(
-                'input[name="name"], input[name="playerName"], input[type="text"]'
-            );
-
-        playerName = input && input.value.trim()
-            ? input.value.trim().slice(0, 20)
-            : "Player";
-
-        gameStarted = true;
-
-        if (!scene) {
-            if (!createWorld()) {
-                gameStarted = false;
-                return;
-            }
+        if (name.length > 20) {
+            showMessage("Имя должно быть не длиннее 20 символов");
+            return;
         }
 
-        // Скрываем меню после нажатия «Играть».
-        const menu = el("gameMenu");
-
-        if (menu) {
-            menu.style.display = "none";
+        if (!scene || !camera || !renderer) {
+            showMessage("Игровой мир ещё не готов", 3000);
+            return;
         }
 
-        hideElement("namePanel");
+        state.name = name;
+        state.started = true;
 
-        showElement("gameUI", "block");
+        $("gameMenu").style.display = "none";
+        $("gameUI").style.display = "block";
+
+        state.position.set(0, 0, 5);
+
+        camera.position.set(
+            state.position.x,
+            1.65,
+            state.position.z
+        );
+
+        camera.rotation.order = "YXZ";
+        camera.rotation.set(state.pitch, state.yaw, 0);
 
         connectToServer();
-        updateStats();
+        updateInterface();
 
-        if (!window.gameAnimationStarted) {
-            window.gameAnimationStarted = true;
-            animate();
+        showMessage("Добро пожаловать, " + state.name + "!");
+    }
+
+    function openShop() {
+        if (!state.started) return;
+
+        const panel = $("shopPanel");
+
+        if (panel) {
+            panel.style.display = "block";
+            updateInterface();
         }
     }
-       // ==============================
-    // УПРАВЛЕНИЕ
-    // ==============================
 
-    function setupControls() {
+    function closeShop() {
+        const panel = $("shopPanel");
+
+        if (panel) {
+            panel.style.display = "none";
+        }
+    }
+
+    function buyUpgrade(type, price) {
+        if (state.coins < price) {
+            showMessage("Недостаточно монет!");
+            return;
+        }
+
+        if (!state.connected) {
+            showMessage("Магазин доступен после подключения к серверу");
+            return;
+        }
+
+        const sent = sendServer({
+            type: "buy",
+            item: type,
+            price
+        });
+
+        if (!sent) {
+            showMessage("Не удалось отправить покупку");
+        }
+            }
+        function setupControls() {
+        const joystick = $("joystick");
+        const stick = $("joystickStick");
+        const lookZone = $("lookZone");
+        const attackButton = $("attackButton");
+
+        if (!joystick || !stick || !lookZone || !attackButton) {
+            return;
+        }
+
+        function updateJoystick(event) {
+            const rect = joystick.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            let dx = event.clientX - centerX;
+            let dy = event.clientY - centerY;
+
+            const maxDistance = rect.width * 0.34;
+            const distance = Math.hypot(dx, dy);
+
+            if (distance > maxDistance) {
+                dx = dx / distance * maxDistance;
+                dy = dy / distance * maxDistance;
+            }
+
+            state.moveX = dx / maxDistance;
+            state.moveZ = dy / maxDistance;
+
+            stick.style.left =
+                `calc(50% + ${dx}px)`;
+
+            stick.style.top =
+                `calc(50% + ${dy}px)`;
+        }
+
+        function resetJoystick() {
+            state.moveX = 0;
+            state.moveZ = 0;
+            state.joystickActive = false;
+
+            stick.style.left = "50%";
+            stick.style.top = "50%";
+        }
+
+        joystick.addEventListener("pointerdown", event => {
+            event.preventDefault();
+
+            state.joystickActive = true;
+
+            try {
+                joystick.setPointerCapture(event.pointerId);
+            } catch (_) {}
+
+            updateJoystick(event);
+        });
+
+        joystick.addEventListener("pointermove", event => {
+            if (!state.joystickActive) return;
+
+            event.preventDefault();
+            updateJoystick(event);
+        });
+
+        joystick.addEventListener("pointerup", resetJoystick);
+        joystick.addEventListener("pointercancel", resetJoystick);
+        joystick.addEventListener("lostpointercapture", resetJoystick);
+
+        lookZone.addEventListener("pointerdown", event => {
+            if (!state.started) return;
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+
+            event.preventDefault();
+
+            state.lookActive = true;
+            state.lastTouchX = event.clientX;
+            state.lastTouchY = event.clientY;
+
+            try {
+                lookZone.setPointerCapture(event.pointerId);
+            } catch (_) {}
+        });
+
+        lookZone.addEventListener("pointermove", event => {
+            if (!state.lookActive || !state.started) return;
+
+            event.preventDefault();
+
+            const dx = event.clientX - state.lastTouchX;
+            const dy = event.clientY - state.lastTouchY;
+
+            state.lastTouchX = event.clientX;
+            state.lastTouchY = event.clientY;
+
+            const sensitivity = event.pointerType === "mouse"
+                ? CONFIG.mouseSensitivity
+                : CONFIG.touchSensitivity;
+
+            state.yaw -= dx * sensitivity;
+            state.pitch -= dy * sensitivity;
+
+            const limit = Math.PI / 2 - 0.05;
+
+            state.pitch = Math.max(
+                -limit,
+                Math.min(limit, state.pitch)
+            );
+        });
+
+        function stopLooking() {
+            state.lookActive = false;
+        }
+
+        lookZone.addEventListener("pointerup", stopLooking);
+        lookZone.addEventListener("pointercancel", stopLooking);
+        lookZone.addEventListener("lostpointercapture", stopLooking);
+
         document.addEventListener("keydown", event => {
-            keys[event.code] = true;
+            state.keys[event.key.toLowerCase()] = true;
 
-            if ([
-                "ArrowUp", "ArrowDown",
-                "ArrowLeft", "ArrowRight",
-                "Space"
-            ].includes(event.code)) {
+            if (
+                ["w", "a", "s", "d", "arrowup", "arrowdown",
+                    "arrowleft", "arrowright", " "].includes(
+                    event.key.toLowerCase()
+                )
+            ) {
                 event.preventDefault();
+            }
+
+            if (event.key.toLowerCase() === "e") {
+                const panel = $("shopPanel");
+
+                if (panel && panel.style.display === "none") {
+                    openShop();
+                } else {
+                    closeShop();
+                }
+            }
+
+            if (event.code === "Space") {
+                attack();
             }
         });
 
         document.addEventListener("keyup", event => {
-            keys[event.code] = false;
+            state.keys[event.key.toLowerCase()] = false;
         });
 
-        const joystick = el("joystick");
-        const stick = el("joystickStick");
+        window.addEventListener("blur", () => {
+            state.keys = {};
+            resetJoystick();
+            stopLooking();
+        });
 
-        if (joystick && stick) {
-            function moveJoystick(event) {
-                const rect = joystick.getBoundingClientRect();
+        attackButton.addEventListener("pointerdown", event => {
+            event.preventDefault();
+            attack();
+        });
 
-                const centerX = rect.left + rect.width / 2;
-                const centerY = rect.top + rect.height / 2;
+        $("shopButton").addEventListener("click", openShop);
+        $("closeShop").addEventListener("click", closeShop);
 
-                let dx = event.clientX - centerX;
-                let dy = event.clientY - centerY;
+        $("buyDamage").addEventListener("click", () => {
+            buyUpgrade("damage", 20);
+        });
 
-                const maxDistance = rect.width * 0.32;
-                const distance = Math.hypot(dx, dy);
+        $("buyHealth").addEventListener("click", () => {
+            buyUpgrade("health", 15);
+        });
 
-                if (distance > maxDistance) {
-                    dx = dx / distance * maxDistance;
-                    dy = dy / distance * maxDistance;
-                }
+        $("buySpeed").addEventListener("click", () => {
+            buyUpgrade("speed", 25);
+        });
 
-                movement.joystickX = dx / maxDistance;
-                movement.joystickY = dy / maxDistance;
+        $("playButton").addEventListener("click", startGame);
 
-                stick.style.transform =
-                    `translate(${dx}px, ${dy}px)`;
-            }
-
-            function stopJoystick() {
-                movement.joystickX = 0;
-                movement.joystickY = 0;
-                stick.style.transform = "translate(0, 0)";
-            }
-
-            joystick.addEventListener("pointerdown", event => {
-                event.preventDefault();
-
-                joystick.setPointerCapture(event.pointerId);
-                moveJoystick(event);
-            });
-
-            joystick.addEventListener("pointermove", event => {
-                if (event.buttons || event.pressure > 0) {
-                    moveJoystick(event);
-                }
-            });
-
-            joystick.addEventListener("pointerup", stopJoystick);
-            joystick.addEventListener("pointercancel", stopJoystick);
-            joystick.addEventListener(
-                "lostpointercapture",
-                stopJoystick
-            );
-        }
-
-        // Поворот камеры касанием экрана.
-        const lookZone = el("lookZone");
-
-        if (lookZone) {
-            lookZone.addEventListener("pointerdown", event => {
-                look.active = true;
-                look.pointerId = event.pointerId;
-                look.lastX = event.clientX;
-                look.lastY = event.clientY;
-
-                try {
-                    lookZone.setPointerCapture(event.pointerId);
-                } catch (_) {}
-            });
-
-            lookZone.addEventListener("pointermove", event => {
-                if (
-                    !look.active ||
-                    event.pointerId !== look.pointerId
-                ) {
-                    return;
-                }
-
-                const dx = event.clientX - look.lastX;
-                const dy = event.clientY - look.lastY;
-
-                look.lastX = event.clientX;
-                look.lastY = event.clientY;
-
-                yaw -= dx * CONFIG.mouseSensitivity;
-                pitch -= dy * CONFIG.mouseSensitivity;
-
-                pitch = Math.max(
-                    -1,
-                    Math.min(0.7, pitch)
-                );
-            });
-
-            function stopLook(event) {
-                if (event.pointerId === look.pointerId) {
-                    look.active = false;
-                    look.pointerId = null;
-                }
-            }
-
-            lookZone.addEventListener("pointerup", stopLook);
-            lookZone.addEventListener("pointercancel", stopLook);
-        }
-
-        // Атака.
-        const attackButton = el("attackButton");
-
-        if (attackButton) {
-            attackButton.addEventListener("click", attack);
-        }
-
-        // Магазин.
-        const shopButton = el("shopButton");
-
-        if (shopButton) {
-            shopButton.addEventListener("click", () => {
-                showElement("shopPanel", "flex");
-                updateStats();
-            });
-        }
-
-        const closeShop = el("closeShop");
-
-        if (closeShop) {
-            closeShop.addEventListener("click", () => {
-                hideElement("shopPanel");
-            });
-        }
-
-        bindShopButton("buyDamage", "damage", 25);
-        bindShopButton("buyHealth", "health", 20);
-        bindShopButton("buySpeed", "speed", 30);
-
-        // Запуск игры.
-        const playButton = el("playButton");
-
-        if (playButton) {
-            playButton.onclick = event => {
-                event.preventDefault();
+        $("playerNameInput").addEventListener("keydown", event => {
+            if (event.key === "Enter") {
                 startGame();
-            };
-        }
-
-        const nameInput =
-            el("playerNameInput") ||
-            el("nameInput") ||
-            el("playerName");
-
-        if (nameInput) {
-            nameInput.addEventListener("keydown", event => {
-                if (event.key === "Enter") {
-                    event.preventDefault();
-                    startGame();
-                }
-            });
-        }
-
-        // Изменение размера экрана.
-        window.addEventListener("resize", () => {
-            if (!camera || !renderer) {
-                return;
             }
+        });
 
-            camera.aspect =
-                window.innerWidth / window.innerHeight;
+        window.addEventListener("resize", () => {
+            if (!camera || !renderer) return;
 
+            camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
 
             renderer.setSize(
@@ -1290,201 +1277,172 @@
         });
     }
 
-    // ==============================
-    // АТАКА
-    // ==============================
-
     function attack() {
-        if (!gameStarted) {
-            return;
-        }
+        if (!state.started) return;
 
         const now = performance.now();
 
-        if (now - lastAttack < CONFIG.attackCooldown) {
+        if (now - state.lastAttack < CONFIG.attackCooldown) {
             return;
         }
 
-        lastAttack = now;
+        state.lastAttack = now;
 
-        if (!send({
-            type: "attack",
-            yaw,
-            pitch,
-            damage: 10 + damageLevel
-        })) {
-            showMessage("Нет подключения к серверу.");
-            return;
-        }
+        let nearestId = null;
+        let nearestDistance = CONFIG.attackDistance;
 
-        showMessage("Атака!");
-    }
+        const forward = new THREE.Vector3(
+            -Math.sin(state.yaw),
+            0,
+            -Math.cos(state.yaw)
+        );
 
-    // ==============================
-    // МАГАЗИН
-    // ==============================
+        for (const [id, player] of state.players) {
+            const offset = new THREE.Vector3(
+                player.model.position.x - state.position.x,
+                0,
+                player.model.position.z - state.position.z
+            );
 
-    function bindShopButton(id, item, price) {
-        const button = el(id);
+            const distance = offset.length();
 
-        if (!button) {
-            return;
-        }
-
-        button.addEventListener("click", () => {
-            if (!connected) {
-                showMessage("Сначала подключись к серверу.");
-                return;
+            if (distance > nearestDistance || distance < 0.001) {
+                continue;
             }
 
-            if (coins < price) {
-                showMessage("Недостаточно монет!");
-                return;
+            offset.normalize();
+
+            if (forward.dot(offset) < 0.45) {
+                continue;
             }
 
-            const sent = send({
-                type: "buy",
-                item
+            nearestId = id;
+            nearestDistance = distance;
+        }
+
+        if (nearestId !== null) {
+            sendServer({
+                type: "attack",
+                target: nearestId,
+                damage: state.damage
             });
 
-            if (sent) {
-                showMessage("Запрос на покупку отправлен.");
-            }
-        });
-    }
+            showMessage("Атака отправлена");
+        } else {
+            sendServer({
+                type: "attack",
+                damage: state.damage
+            });
 
-    // ==============================
-    // ДВИЖЕНИЕ ИГРОКА
-    // ==============================
+            showMessage("Удар!");
+        }
+    }
 
     function updateMovement(delta) {
-        if (!gameStarted) {
-            return;
+        if (!state.started || !state.position) return;
+
+        let forward = 0;
+        let strafe = 0;
+
+        if (state.keys["w"] || state.keys["arrowup"]) {
+            forward += 1;
         }
 
-        let forward = movement.joystickY;
-        let side = movement.joystickX;
+        if (state.keys["s"] || state.keys["arrowdown"]) {
+            forward -= 1;
+        }
 
-        if (keys["KeyW"] || keys["ArrowUp"]) forward -= 1;
-        if (keys["KeyS"] || keys["ArrowDown"]) forward += 1;
-        if (keys["KeyA"] || keys["ArrowLeft"]) side -= 1;
-        if (keys["KeyD"] || keys["ArrowRight"]) side += 1;
+        if (state.keys["a"] || state.keys["arrowleft"]) {
+            strafe -= 1;
+        }
 
-        const length = Math.hypot(side, forward);
+        if (state.keys["d"] || state.keys["arrowright"]) {
+            strafe += 1;
+        }
+
+        forward -= state.moveZ;
+        strafe += state.moveX;
+
+        const length = Math.hypot(forward, strafe);
 
         if (length > 1) {
-            side /= length;
             forward /= length;
+            strafe /= length;
         }
 
-        movement.x = side;
-        movement.z = forward;
+        const speed = state.speed * delta;
 
-        const speed = CONFIG.speed * (1 + speedLevel * 0.1);
+        const dx =
+            -Math.sin(state.yaw) * forward * speed +
+            Math.cos(state.yaw) * strafe * speed;
 
-        const moveX =
-            Math.cos(yaw) * side -
-            Math.sin(yaw) * forward;
+        const dz =
+            -Math.cos(state.yaw) * forward * speed -
+            Math.sin(state.yaw) * strafe * speed;
 
-        const moveZ =
-            Math.sin(yaw) * side +
-            Math.cos(yaw) * forward;
+        state.position.x += dx;
+        state.position.z += dz;
 
-        send({
-            type: "input",
-            x: moveX * speed * delta,
-            z: moveZ * speed * delta,
-            yaw,
-            moveX,
-            moveY: forward
-        });
-    }
-
-    // ==============================
-    // КАМЕРА
-    // ==============================
-
-    function updateCamera() {
-        if (!camera || myId === null) {
-            return;
-        }
-
-        const player = players.get(String(myId));
-
-        if (!player) {
-            return;
-        }
-
-        const distance = 5;
-
-        const targetX = player.model.position.x;
-        const targetZ = player.model.position.z;
-
-        const cameraX = targetX - Math.sin(yaw) * distance;
-        const cameraZ = targetZ - Math.cos(yaw) * distance;
-        const cameraY = 2.8 + pitch * 2;
-
-        camera.position.lerp(
-            new THREE.Vector3(cameraX, cameraY, cameraZ),
-            0.18
+        // Камера находится на уровне глаз игрока.
+        camera.position.set(
+            state.position.x,
+            1.65,
+            state.position.z
         );
 
-        camera.lookAt(
-            targetX,
-            1.4 + pitch,
-            targetZ
+        camera.rotation.order = "YXZ";
+        camera.rotation.set(
+            state.pitch,
+            state.yaw,
+            0
         );
 
-        player.model.rotation.y = yaw;
-    }
+        // Не отправляем координаты каждый кадр.
+        state.networkTimer = (state.networkTimer || 0) + delta;
 
-    // ==============================
-    // ИГРОВОЙ ЦИКЛ
-    // ==============================
+        if (state.networkTimer >= 0.05) {
+            state.networkTimer = 0;
+
+            sendServer({
+                type: "input",
+                x: state.position.x,
+                z: state.position.z,
+                rotation: state.yaw,
+                forward,
+                strafe
+            });
+        }
+    }
 
     function animate() {
-        requestAnimationFrame(animate);
+        animationId = requestAnimationFrame(animate);
 
-        if (!renderer || !scene || !camera) {
-            return;
-        }
+        if (!renderer || !scene || !camera) return;
 
         const delta = Math.min(clock.getDelta(), 0.05);
 
-        if (gameStarted) {
-            updateMovement(delta);
-
-            // Плавное движение других игроков.
-            for (const player of players.values()) {
-                player.model.position.x +=
-                    (player.targetX - player.model.position.x) * 0.25;
-
-                player.model.position.z +=
-                    (player.targetZ - player.model.position.z) * 0.25;
-            }
-
-            updateCamera();
-        }
+        updateMovement(delta);
 
         renderer.render(scene, camera);
     }
 
-    // ==============================
-    // ЗАПУСК ПРИЛОЖЕНИЯ
-    // ==============================
-
     function init() {
         createInterface();
 
-        if (typeof THREE !== "undefined") {
-            createWorld();
-        } else {
-            console.error("Three.js не загружен.");
+        if (!createWorld()) {
+            $("menuConnection").textContent =
+                "Ошибка загрузки 3D-движка";
+            return;
         }
 
+        // Координаты игрока хранятся отдельно от камеры.
+        state.position = new THREE.Vector3(0, 0, 5);
+
         setupControls();
-        updateStats();
-        setConnectionStatus("Готово к запуску");
+
+        updateInterface();
+
+        animate();
     }
 
     if (document.readyState === "loading") {
@@ -1495,4 +1453,3 @@
         init();
     }
 })();
-   
