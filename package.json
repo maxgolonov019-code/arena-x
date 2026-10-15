@@ -1,8 +1,9 @@
+
 {
-    "name": "arena-x",
-    "version": "1.0.0",
+    "name": "arena-x-3d",
+    "version": "2.0.0",
     "private": true,
-    "description": "ARENA X multiplayer 2D game",
+    "description": "ARENA X - 3D multiplayer open world",
     "main": "server.js",
     "scripts": {
         "start": "node server.js"
