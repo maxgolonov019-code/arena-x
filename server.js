@@ -1,228 +1,206 @@
-"use strict";
 
-const WebSocket = require("ws");
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const crypto = require("crypto");
+const WebSocket = require("ws");
 
-const PORT = process.env.PORT || 3000;
-const MAX_PLAYERS = 32;
-const WORLD_WIDTH = 2200;
-const WORLD_HEIGHT = 2200;
-
-const server = new WebSocket.Server({
-    port: PORT
-});
+const PORT = Number(process.env.PORT) || 10000;
+const ROOT = __dirname;
 
 const players = new Map();
 
-function send(socket, data) {
-    if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(data));
-    }
-}
+const mimeTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".png": "image/png",
+  ".ico": "image/x-icon"
+};
 
-function broadcast(data, except = null) {
-    const message = JSON.stringify(data);
+// Раздаём файлы игры через тот же сервер
+const httpServer = http.createServer((req, res) => {
+  const pathname = new URL(req.url, "http://localhost").pathname;
 
-    for (const socket of server.clients) {
-        if (
-            socket !== except &&
-            socket.readyState === WebSocket.OPEN
-        ) {
-            socket.send(message);
-        }
-    }
-}
+  if (pathname === "/ws") {
+    res.writeHead(426, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Upgrade": "websocket"
+    });
+    res.end("Подключайся к /ws через WebSocket.");
+    return;
+  }
 
-function getPlayerList() {
-    return Array.from(players.values());
-}
+  const requestedFile = pathname === "/"
+    ? "index.html"
+    : path.basename(decodeURIComponent(pathname));
 
-function cleanName(name) {
-    if (typeof name !== "string") {
-        return "Игрок";
-    }
+  const allowedFiles = new Set([
+    "index.html",
+    "game.js",
+    "style.css"
+  ]);
 
-    return name
-        .replace(/[<>]/g, "")
-        .trim()
-        .slice(0, 16) || "Игрок";
-}
+  if (!allowedFiles.has(requestedFile)) {
+    res.writeHead(404);
+    res.end("Файл не найден");
+    return;
+  }
 
-function safeNumber(value, min, max, fallback = 0) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-        return fallback;
-    }
+  const filePath = path.join(ROOT, requestedFile);
 
-    return Math.max(min, Math.min(max, value));
-}
-
-server.on("connection", socket => {
-    if (players.size >= MAX_PLAYERS) {
-        send(socket, {
-            type: "error",
-            message: "Сервер заполнен"
-        });
-
-        socket.close(1008, "Server full");
-        return;
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.writeHead(404, {
+        "Content-Type": "text/plain; charset=utf-8"
+      });
+      res.end("Не удалось открыть " + requestedFile);
+      return;
     }
 
-    const id = crypto.randomUUID();
-
-    const player = {
-        id,
-        name: "Игрок",
-        x: WORLD_WIDTH / 2,
-        y: WORLD_HEIGHT / 2,
-        angle: 0,
-        health: 100,
-        weapon: "pistol",
-        connected: true
-    };
-
-    players.set(id, player);
-
-    console.log("Подключился:", id);
-
-    send(socket, {
-        type: "welcome",
-        id,
-        world: {
-            width: WORLD_WIDTH,
-            height: WORLD_HEIGHT
-        },
-        players: getPlayerList()
+    res.writeHead(200, {
+      "Content-Type":
+        mimeTypes[path.extname(filePath)] || "application/octet-stream",
+      "Cache-Control": "no-cache"
     });
 
-    broadcast({
-        type: "playerJoined",
-        player
-    }, socket);
-
-    broadcast({
-        type: "playerCount",
-        count: players.size
-    });
-
-    socket.on("message", raw => {
-        let data;
-
-        try {
-            data = JSON.parse(raw.toString());
-        } catch {
-            send(socket, {
-                type: "error",
-                message: "Некорректное сообщение"
-            });
-            return;
-        }
-
-        if (!data || typeof data.type !== "string") {
-            return;
-        }
-
-        switch (data.type) {
-            case "join": {
-                player.name = cleanName(data.name);
-
-                send(socket, {
-                    type: "joined",
-                    id,
-                    name: player.name
-                });
-
-                broadcast({
-                    type: "playerUpdated",
-                    player
-                });
-
-                break;
-            }
-
-            case "move": {
-                player.x = safeNumber(
-                    data.x, 0, WORLD_WIDTH, player.x
-                );
-
-                player.y = safeNumber(
-                    data.y, 0, WORLD_HEIGHT, player.y
-                );
-
-                player.angle = safeNumber(
-                    data.angle, -100000, 100000, player.angle
-                );
-
-                if (typeof data.health === "number") {
-                    player.health = safeNumber(
-                        data.health, 0, 100, player.health
-                    );
-                }
-
-                if (typeof data.weapon === "string") {
-                    const allowedWeapons = [
-                        "pistol",
-                        "rifle",
-                        "shotgun",
-                        "sniper"
-                    ];
-
-                    if (allowedWeapons.includes(data.weapon)) {
-                        player.weapon = data.weapon;
-                    }
-                }
-
-                broadcast({
-                    type: "playerMoved",
-                    player
-                }, socket);
-
-                break;
-            }
-
-            case "ping": {
-                send(socket, {
-                    type: "pong",
-                    time: Date.now()
-                });
-
-                break;
-            }
-
-            default: {
-                send(socket, {
-                    type: "error",
-                    message: "Неизвестный тип сообщения"
-                });
-            }
-        }
-    });
-
-    socket.on("close", () => {
-        players.delete(id);
-
-        console.log("Отключился:", id);
-
-        broadcast({
-            type: "playerLeft",
-            id
-        });
-
-        broadcast({
-            type: "playerCount",
-            count: players.size
-        });
-    });
-
-    socket.on("error", error => {
-        console.error("Ошибка WebSocket:", error.message);
-    });
+    res.end(data);
+  });
 });
 
-server.on("listening", () => {
-    console.log(`Neon Strike server запущен на порту ${PORT}`);
-    console.log(`Игроков максимум: ${MAX_PLAYERS}`);
+// WebSocket работает на том же HTTP-порту
+const wss = new WebSocket.Server({
+  server: httpServer,
+  path: "/ws"
 });
 
-server.on("error", error => {
-    console.error("Ошибка сервера:", error.message);
+function send(ws, data) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+function broadcast(data, exceptId = null) {
+  const message = JSON.stringify(data);
+
+  for (const [id, player] of players) {
+    if (id !== exceptId && player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(message);
+    }
+  }
+}
+
+wss.on("connection", (ws) => {
+  const id = crypto.randomUUID();
+
+  const player = {
+    id,
+    name: "Игрок",
+    x: 200 + Math.random() * 300,
+    y: 200 + Math.random() * 200,
+    health: 100,
+    weapon: "pistol",
+    level: 1,
+    ws
+  };
+
+  players.set(id, player);
+
+  const publicPlayer = (p) => ({
+    id: p.id,
+    name: p.name,
+    x: p.x,
+    y: p.y,
+    health: p.health,
+    weapon: p.weapon,
+    level: p.level
+  });
+
+  send(ws, {
+    type: "welcome",
+    id,
+    players: [...players.values()].map(publicPlayer)
+  });
+
+  broadcast({
+    type: "playerJoined",
+    player: publicPlayer(player)
+  }, id);
+
+  ws.on("message", (raw) => {
+    let message;
+
+    try {
+      message = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+
+    if (!message || typeof message.type !== "string") return;
+
+    if (message.type === "join") {
+      if (typeof message.name === "string") {
+        player.name = message.name.trim().slice(0, 20) || "Игрок";
+      }
+    }
+
+    if (
+      message.type === "move" ||
+      message.type === "update" ||
+      message.type === "playerUpdate"
+    ) {
+      if (Number.isFinite(message.x)) {
+        player.x = Math.max(0, Math.min(5000, message.x));
+      }
+
+      if (Number.isFinite(message.y)) {
+        player.y = Math.max(0, Math.min(5000, message.y));
+      }
+
+      if (Number.isFinite(message.health)) {
+        player.health = Math.max(0, Math.min(100, message.health));
+      }
+
+      if (typeof message.weapon === "string") {
+        player.weapon = message.weapon.slice(0, 30);
+      }
+
+      if (Number.isFinite(message.level)) {
+        player.level = Math.max(1, Math.min(999, message.level));
+      }
+
+      broadcast({
+        type: "playerUpdated",
+        player: publicPlayer(player)
+      }, id);
+    }
+
+    // Передаём другим игрокам события игры
+    if (
+      message.type === "shoot" ||
+      message.type === "reload" ||
+      message.type === "super"
+    ) {
+      broadcast({
+        type: message.type,
+        playerId: id,
+        x: player.x,
+        y: player.y
+      }, id);
+    }
+  });
+
+  ws.on("close", () => {
+    players.delete(id);
+    broadcast({ type: "playerLeft", id });
+  });
+
+  ws.on("error", (error) => {
+    console.error("WebSocket error:", error.message);
+  });
 });
+
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Game server started on port ${PORT}`);
+});
+      
