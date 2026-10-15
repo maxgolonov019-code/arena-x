@@ -4,102 +4,197 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#15251d">
-    <title>ARENA X — Открытый мир</title>
+    <meta name="theme-color" content="#13231b">
+    <title>ARENA X 3D</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <main class="game">
-        <canvas id="gameCanvas"></canvas>
+    <main id="game">
+        <div id="world"></div>
 
         <header class="topbar">
             <div class="brand">
-                <span class="brand-mark">X</span>
+                <div class="brand-icon">X</div>
                 <div>
                     <strong>ARENA X</strong>
-                    <small>ОТКРЫТЫЙ МИР</small>
+                    <small>OPEN WORLD</small>
                 </div>
             </div>
 
-            <div class="online">
-                <span class="online-dot"></span>
-                <span id="onlineCount">0 игроков</span>
+            <div class="top-actions">
+                <div class="coins">✦ <span id="coins">50</span></div>
+                <button id="menuButton" class="icon-button" aria-label="Открыть меню">☰</button>
             </div>
         </header>
 
-        <section class="player-panel">
-            <div class="player-line">
-                <span id="playerName">Подключение...</span>
-                <span id="hpText">100 / 100</span>
+        <section class="hud">
+            <div class="hud-line">
+                <strong id="playerName">Игрок</strong>
+                <span>Ур. <b id="level">1</b></span>
             </div>
 
-            <div class="health-track">
-                <div id="healthFill" class="health-fill"></div>
+            <div class="bar">
+                <div id="healthFill" class="bar-fill health"></div>
+            </div>
+            <div class="small-line">
+                <span>ЗДОРОВЬЕ</span>
+                <span id="healthText">100 / 100</span>
             </div>
 
-            <div id="statusText" class="status">
-                Подключаемся к серверу...
+            <div class="bar xp-bar">
+                <div id="xpFill" class="bar-fill experience"></div>
             </div>
+            <div class="small-line">
+                <span>ОПЫТ</span>
+                <span id="xpText">0 / 100</span>
+            </div>
+
+            <div id="gameStatus" class="game-status">Подключение...</div>
         </section>
 
-        <div class="world-label">ЗЕЛЁНАЯ ДОЛИНА</div>
+        <div class="location-label">
+            <span class="location-dot"></span>
+            ЗЕЛЁНАЯ ДОЛИНА
+        </div>
 
-        <section id="nameScreen" class="overlay">
-            <form id="nameForm" class="name-card">
-                <div class="logo-large">X</div>
-                <h1>ARENA X</h1>
-                <p>Твой мир. Твои правила.</p>
+        <div class="crosshair" aria-hidden="true">
+            <span></span>
+            <span></span>
+        </div>
 
-                <label for="nameInput">Имя персонажа</label>
-                <input
-                    id="nameInput"
-                    type="text"
-                    maxlength="16"
-                    minlength="1"
-                    placeholder="Например, Shadow"
-                    autocomplete="nickname"
-                    required
-                >
-
-                <button type="submit" id="playButton">
-                    Войти в мир
-                </button>
-
-                <small id="connectionText">
-                    Ожидаем соединения с сервером...
-                </small>
-            </form>
-        </section>
-
-        <section class="mobile-controls" aria-label="Управление">
-            <div class="movement-pad">
-                <button class="move up" data-move="up" aria-label="Вверх">▲</button>
-                <button class="move left" data-move="left" aria-label="Влево">◀</button>
-                <button class="move down" data-move="down" aria-label="Вниз">▼</button>
-                <button class="move right" data-move="right" aria-label="Вправо">▶</button>
+        <section class="mobile-controls">
+            <div class="joystick" id="joystick">
+                <div class="joystick-ring"></div>
+                <div class="joystick-knob" id="joystickKnob"></div>
             </div>
 
-            <div class="attack-pad">
-                <button id="magicButton" class="attack magic">
+            <div class="combat-controls">
+                <button id="magicButton" class="combat-button magic-button">
                     <span>✦</span>
                     <small>МАГИЯ</small>
                 </button>
-
-                <button id="meleeButton" class="attack melee">
+                <button id="meleeButton" class="combat-button melee-button">
                     <span>⚔</span>
                     <small>УДАР</small>
                 </button>
             </div>
         </section>
 
-        <footer class="bottom-hint">
-            <span>WASD — движение</span>
-            <span>J — удар</span>
-            <span>K — магия</span>
-        </footer>
+        <div class="desktop-hint">
+            WASD — движение · мышь — обзор · J — удар · K — магия · Esc — меню
+        </div>
+
+        <section id="menuScreen" class="screen">
+            <div class="menu-card">
+                <div class="big-logo">X</div>
+                <p class="eyebrow">ТВОЯ ИСТОРИЯ НАЧИНАЕТСЯ ЗДЕСЬ</p>
+                <h1>ARENA <span>X</span></h1>
+                <p class="subtitle">Исследуй. Сражайся. Становись сильнее.</p>
+
+                <label for="nameInput">ИМЯ ПЕРСОНАЖА</label>
+                <input id="nameInput" maxlength="16" value="Игрок" autocomplete="nickname">
+
+                <button id="playButton" class="primary-button" disabled>
+                    Подключение...
+                </button>
+
+                <button id="lobbyButton" class="secondary-button">
+                    ЛОББИ И МАГАЗИН
+                </button>
+
+                <div id="connectionText" class="connection-text">
+                    Соединяемся с сервером...
+                </div>
+            </div>
+        </section>
+
+        <section id="lobbyScreen" class="screen hidden">
+            <div class="panel lobby-panel">
+                <button class="back-button" data-close>← Назад</button>
+                <p class="eyebrow">БЕЗОПАСНАЯ ЗОНА</p>
+                <h2>Твоё лобби</h2>
+                <p class="subtitle">Подготовься к следующему бою.</p>
+
+                <div class="lobby-stats">
+                    <div>
+                        <small>УРОВЕНЬ</small>
+                        <strong id="lobbyLevel">1</strong>
+                    </div>
+                    <div>
+                        <small>МОНЕТЫ</small>
+                        <strong id="lobbyCoins">50</strong>
+                    </div>
+                    <div>
+                        <small>УРОН</small>
+                        <strong id="lobbyDamage">20</strong>
+                    </div>
+                </div>
+
+                <button id="shopButton" class="primary-button">Открыть магазин</button>
+                <button id="returnButton" class="secondary-button">Вернуться в мир</button>
+                <button id="exitButton" class="exit-button">Выйти в главное меню</button>
+            </div>
+        </section>
+
+        <section id="shopScreen" class="screen hidden">
+            <div class="panel shop-panel">
+                <button class="back-button" data-close>← В лобби</button>
+                <p class="eyebrow">УЛУЧШАЙ СВОЕГО ГЕРОЯ</p>
+                <h2>Магазин</h2>
+                <p class="shop-balance">Твои монеты: <strong id="shopCoins">50</strong> ✦</p>
+
+                <div class="shop-items">
+                    <article class="shop-item">
+                        <div class="item-icon damage-icon">⚔</div>
+                        <div class="item-info">
+                            <strong>Сила атаки</strong>
+                            <small>+5 урона за удар</small>
+                            <span id="damagePrice">50 ✦</span>
+                        </div>
+                        <button data-buy="damage">Купить</button>
+                    </article>
+
+                    <article class="shop-item">
+                        <div class="item-icon health-icon">♥</div>
+                        <div class="item-info">
+                            <strong>Запас здоровья</strong>
+                            <small>+20 к максимуму HP</small>
+                            <span id="healthPrice">60 ✦</span>
+                        </div>
+                        <button data-buy="health">Купить</button>
+                    </article>
+
+                    <article class="shop-item">
+                        <div class="item-icon speed-icon">➤</div>
+                        <div class="item-info">
+                            <strong>Скорость</strong>
+                            <small>Быстрее перемещение</small>
+                            <span id="speedPrice">70 ✦</span>
+                        </div>
+                        <button data-buy="speed">Купить</button>
+                    </article>
+
+                    <article class="shop-item">
+                        <div class="item-icon heal-icon">✚</div>
+                        <div class="item-info">
+                            <strong>Лечение</strong>
+                            <small>Полностью восстановить HP</small>
+                            <span id="healPrice">25 ✦</span>
+                        </div>
+                        <button data-buy="heal">Купить</button>
+                    </article>
+                </div>
+
+                <div id="shopMessage" class="shop-message"></div>
+                <button id="shopReturnButton" class="secondary-button">Вернуться в мир</button>
+            </div>
+        </section>
+
+        <div id="toast" class="toast"></div>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="game.js"></script>
 </body>
 </html>
-              
+                    
