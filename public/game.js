@@ -1,1476 +1,1205 @@
+
 (() => {
     "use strict";
 
-    const CONFIG = {
-        serverUrl: "",
-        moveSpeed: 6,
-        mouseSensitivity: 0.004,
-        touchSensitivity: 0.006,
-        attackDistance: 3,
-        attackCooldown: 500
-    };
-
-    const state = {
-        started: false,
-        connected: false,
-        socket: null,
-        myId: null,
-        name: "",
-        health: 100,
-        maxHealth: 100,
-        level: 1,
-        coins: 0,
-        xp: 0,
-        damage: 10,
-        speed: CONFIG.moveSpeed,
-        lastAttack: 0,
-        yaw: 0,
-        pitch: 0,
-        moveX: 0,
-        moveZ: 0,
-        position: { x: 0, z: 8 },
-        players: new Map(),
-        keys: {},
-        joystickActive: false,
-        lookActive: false,
-        lastTouchX: 0,
-        lastTouchY: 0,
-        networkTimer: 0
-    };
-
-    let scene;
-    let camera;
-    let renderer;
-    let clock;
-    let animationId;
-
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
     const $ = id => document.getElementById(id);
 
-    function addStyles() {
-        if ($("gameStyles")) return;
+    const CONFIG = {
+        worldWidth: 2200,
+        worldHeight: 2200,
+        enemySpawnTime: 1.8,
+        serverUrl: ""
+    };
 
-        const style = document.createElement("style");
-        style.id = "gameStyles";
+    const weapons = {
+        pistol: {
+            name: "Пистолет",
+            price: 0,
+            damage: 25,
+            delay: 0.32,
+            speed: 650,
+            spread: 0.025,
+            pellets: 1,
+            color: "#ffe18a",
+            description: "Надёжное начальное оружие",
+            owned: true
+        },
+        rifle: {
+            name: "Автомат",
+            price: 120,
+            damage: 15,
+            delay: 0.12,
+            speed: 850,
+            spread: 0.07,
+            pellets: 1,
+            color: "#8eeaff",
+            description: "Быстрая стрельба",
+            owned: false
+        },
+        shotgun: {
+            name: "Дробовик",
+            price: 180,
+            damage: 13,
+            delay: 0.65,
+            speed: 600,
+            spread: 0.48,
+            pellets: 6,
+            color: "#ffb56b",
+            description: "Шесть снарядов за выстрел",
+            owned: false
+        },
+        sniper: {
+            name: "Снайперка",
+            price: 250,
+            damage: 75,
+            delay: 1.1,
+            speed: 1200,
+            spread: 0.005,
+            pellets: 1,
+            color: "#c7a5ff",
+            description: "Большой урон и точность",
+            owned: false
+        }
+    };
 
-        style.textContent = `
-            * {
-                box-sizing: border-box;
-                -webkit-tap-highlight-color: transparent;
-            }
+    const supers = {
+        blast: {
+            name: "Суперудар",
+            price: 100,
+            description: "Урон всем врагам поблизости",
+            owned: false,
+            cooldown: 8
+        },
+        dash: {
+            name: "Рывок",
+            price: 140,
+            description: "Быстрый рывок и защита",
+            owned: false,
+            cooldown: 6
+        },
+        storm: {
+            name: "Электрошок",
+            price: 220,
+            description: "Мощный удар по врагам",
+            owned: false,
+            cooldown: 12
+        }
+    };
 
-            html, body {
-                width: 100%;
-                height: 100%;
-                margin: 0;
-                overflow: hidden;
-                background: #111827;
-                color: white;
-                font-family: Arial, sans-serif;
-                touch-action: none;
-                user-select: none;
-            }
+    const player = {
+        x: CONFIG.worldWidth / 2,
+        y: CONFIG.worldHeight / 2,
+        radius: 17,
+        speed: 230,
+        health: 100,
+        maxHealth: 100,
+        damageBonus: 0,
+        coins: 100,
+        level: 1,
+        xp: 0,
+        xpNext: 100,
+        weapon: "pistol",
+        angle: 0,
+        fireTimer: 0,
+        superTimer: 0,
+        dashTimer: 0,
+        invulnerable: 0,
+        dead: false
+    };
 
-            #gameCanvas {
-                position: fixed;
-                inset: 0;
-                z-index: 0;
-                width: 100%;
-                height: 100%;
-            }
+    let cameraX = 0;
+    let cameraY = 0;
+    let lastTime = 0;
+    let spawnTimer = 0;
+    let shooting = false;
+    let joystickPointer = null;
+    let joystickX = 0;
+    let joystickY = 0;
+    let aimPointer = null;
+    let aimX = 0;
+    let aimY = 0;
+    let messageTimer = 0;
+    let socket = null;
+    let online = false;
+    let gameStarted = false;
 
-            #gameUI {
-                position: fixed;
-                inset: 0;
-                z-index: 5;
-                pointer-events: none;
-            }
+    const keys = {};
+    const bullets = [];
+    const enemies = [];
+    const particles = [];
+    const decorations = [];
+    const buildings = [];
 
-            #gameTop {
-                position: absolute;
-                top: 12px;
-                left: 12px;
-                right: 12px;
-                display: flex;
-                justify-content: space-between;
-                align-items: flex-start;
-            }
+    function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-            #gameStats {
-                min-width: 155px;
-                padding: 10px;
-                border-radius: 12px;
-                background: #10131cdd;
-                font-size: 13px;
-                line-height: 1.5;
-            }
+        canvas.width = Math.floor(innerWidth * dpr);
+        canvas.height = Math.floor(innerHeight * dpr);
+        canvas.style.width = innerWidth + "px";
+        canvas.style.height = innerHeight + "px";
 
-            #healthTrack {
-                height: 9px;
-                overflow: hidden;
-                margin: 5px 0;
-                border-radius: 8px;
-                background: #444;
-            }
-
-            #healthBar {
-                height: 100%;
-                width: 100%;
-                background: #35dc75;
-            }
-
-            #connectionStatus {
-                margin-top: 4px;
-                color: #ffd166;
-                font-size: 11px;
-            }
-
-            button, input {
-                font: inherit;
-            }
-
-            button {
-                border: 0;
-                border-radius: 10px;
-                padding: 11px 14px;
-                color: white;
-                background: #596cff;
-                font-weight: bold;
-            }
-
-            #shopButton {
-                pointer-events: auto;
-            }
-
-            #lookZone {
-                position: absolute;
-                right: 0;
-                top: 0;
-                width: 60%;
-                height: 100%;
-                pointer-events: auto;
-                touch-action: none;
-            }
-
-            #joystick {
-                position: absolute;
-                left: 22px;
-                bottom: 28px;
-                width: 116px;
-                height: 116px;
-                border: 2px solid #ffffff88;
-                border-radius: 50%;
-                background: #11182799;
-                pointer-events: auto;
-                touch-action: none;
-            }
-
-            #joystickStick {
-                position: absolute;
-                left: 50%;
-                top: 50%;
-                width: 46px;
-                height: 46px;
-                transform: translate(-50%, -50%);
-                border: 2px solid white;
-                border-radius: 50%;
-                background: #8094ffdd;
-            }
-
-            #attackButton {
-                position: absolute;
-                right: 22px;
-                bottom: 35px;
-                width: 76px;
-                height: 76px;
-                padding: 0;
-                border: 2px solid #ffffffbb;
-                border-radius: 50%;
-                background: #e84958ee;
-                pointer-events: auto;
-                touch-action: none;
-            }
-
-            #statusMessage {
-                position: absolute;
-                top: 105px;
-                left: 50%;
-                transform: translateX(-50%);
-                max-width: 90%;
-                padding: 9px 13px;
-                border-radius: 9px;
-                background: #10131cdd;
-                text-align: center;
-            }
-
-            #gameMenu {
-                position: fixed;
-                inset: 0;
-                z-index: 20;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 20px;
-                background:
-                    radial-gradient(circle at top, #303d78, transparent 60%),
-                    #10131c;
-            }
-
-            #menuCard {
-                width: 100%;
-                max-width: 360px;
-                padding: 25px;
-                border: 1px solid #ffffff25;
-                border-radius: 20px;
-                background: #171c2bf5;
-                text-align: center;
-            }
-
-            #menuCard h1 {
-                margin-top: 0;
-            }
-
-            #menuCard p {
-                color: #c5cbe0;
-            }
-
-            #playerNameInput {
-                display: block;
-                width: 100%;
-                margin: 20px 0 12px;
-                padding: 13px;
-                border: 1px solid #596cff;
-                border-radius: 10px;
-                outline: none;
-                background: #0d1120;
-                color: white;
-                font-size: 16px;
-                touch-action: auto;
-                user-select: text;
-            }
-
-            #playButton {
-                width: 100%;
-                padding: 14px;
-            }
-
-            #menuConnection {
-                margin-top: 12px;
-                color: #ffd166;
-                font-size: 12px;
-            }
-
-            #shopPanel {
-                position: absolute;
-                z-index: 10;
-                top: 50%;
-                left: 50%;
-                width: min(330px, calc(100% - 32px));
-                padding: 20px;
-                transform: translate(-50%, -50%);
-                border: 1px solid #ffffff30;
-                border-radius: 16px;
-                background: #171c2bf5;
-                pointer-events: auto;
-            }
-
-            .shopItem {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-                margin: 10px 0;
-                padding: 10px;
-                border-radius: 10px;
-                background: #ffffff0d;
-            }
-
-            .shopItem button {
-                padding: 8px;
-            }
-
-            #closeShop {
-                width: 100%;
-                background: #394052;
-            }
-
-            @media (max-width: 420px) {
-                #gameStats {
-                    min-width: 140px;
-                    font-size: 12px;
-                }
-
-                #joystick {
-                    width: 105px;
-                    height: 105px;
-                    left: 16px;
-                    bottom: 22px;
-                }
-
-                #attackButton {
-                    right: 16px;
-                    bottom: 25px;
-                    width: 70px;
-                    height: 70px;
-                }
-            }
-        `;
-
-        document.head.appendChild(style);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    function createInterface() {
-        addStyles();
+    window.addEventListener("resize", resize);
+    resize();
 
-        const ui = document.createElement("div");
-        ui.id = "gameUI";
-
-        ui.innerHTML = `
-            <div id="gameTop">
-                <div id="gameStats">
-                    <div id="healthText">Здоровье: 100/100</div>
-                    <div id="healthTrack">
-                        <div id="healthBar"></div>
-                    </div>
-                    <div id="levelText">Уровень: 1</div>
-                    <div id="coinsText">Монеты: 0</div>
-                    <div id="xpText">Опыт: 0</div>
-                    <div id="connectionStatus">Нет подключения</div>
-                </div>
-                <button id="shopButton">Магазин</button>
-            </div>
-
-            <div id="statusMessage">Добро пожаловать!</div>
-            <div id="lookZone"></div>
-
-            <div id="joystick">
-                <div id="joystickStick"></div>
-            </div>
-
-            <button id="attackButton">АТАКА</button>
-
-            <div id="shopPanel" style="display:none">
-                <h2>Магазин</h2>
-                <p>Монеты: <b id="shopCoins">0</b></p>
-
-                <div class="shopItem">
-                    <span>Урон +5</span>
-                    <button id="buyDamage">20 монет</button>
-                </div>
-
-                <div class="shopItem">
-                    <span>Здоровье +25</span>
-                    <button id="buyHealth">15 монет</button>
-                </div>
-
-                <div class="shopItem">
-                    <span>Скорость +1</span>
-                    <button id="buySpeed">25 монет</button>
-                </div>
-
-                <button id="closeShop">Закрыть</button>
-            </div>
-        `;
-
-        document.body.appendChild(ui);
-
-        const menu = document.createElement("div");
-        menu.id = "gameMenu";
-
-        menu.innerHTML = `
-            <div id="menuCard">
-                <h1>3D Multiplayer</h1>
-                <p>Введи имя и отправляйся в город!</p>
-                <input
-                    id="playerNameInput"
-                    maxlength="20"
-                    placeholder="Твоё имя"
-                    autocomplete="nickname"
-                >
-                <button id="playButton">ИГРАТЬ</button>
-                <div id="menuConnection">Подготовка игры...</div>
-            </div>
-        `;
-
-        document.body.appendChild(menu);
+    function random(min, max) {
+        return min + Math.random() * (max - min);
     }
 
-    function showMessage(message, duration = 2200) {
-        const element = $("statusMessage");
-        if (!element) return;
-
-        element.textContent = message;
-        element.style.display = "block";
-
-        clearTimeout(showMessage.timer);
-
-        showMessage.timer = setTimeout(() => {
-            element.style.display = "none";
-        }, duration);
+    function distance(a, b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
-    function updateInterface() {
-        $("healthText").textContent =
-            `Здоровье: ${state.health}/${state.maxHealth}`;
-
-        const hp = Math.max(
-            0,
-            Math.min(100, state.health / state.maxHealth * 100)
-        );
-
-        $("healthBar").style.width = hp + "%";
-
-        $("healthBar").style.background =
-            hp > 50 ? "#35dc75" :
-            hp > 25 ? "#ffd166" : "#ff4757";
-
-        $("levelText").textContent = `Уровень: ${state.level}`;
-        $("coinsText").textContent = `Монеты: ${state.coins}`;
-        $("xpText").textContent = `Опыт: ${state.xp}`;
-        $("shopCoins").textContent = state.coins;
-
-        const text = state.connected
-            ? "Сервер подключён"
-            : "Одиночный режим / нет сервера";
-
-        $("connectionStatus").textContent = text;
-
-        if (!state.started) {
-            $("menuConnection").textContent = text;
-        }
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    function addBox(x, y, z, width, height, depth, color) {
-        const mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(width, height, depth),
-            new THREE.MeshStandardMaterial({
-                color,
-                roughness: 0.9
-            })
-        );
+    function showMessage(text) {
+        const element = $("message");
 
-        mesh.position.set(x, y + height / 2, z);
-        scene.add(mesh);
-
-        return mesh;
+        element.textContent = text;
+        element.style.opacity = "1";
+        messageTimer = 2.2;
     }
 
-    function addRoad(x, z, width, depth) {
-        const road = new THREE.Mesh(
-            new THREE.PlaneGeometry(width, depth),
-            new THREE.MeshStandardMaterial({
-                color: 0x343941,
-                roughness: 1
-            })
-        );
-
-        road.rotation.x = -Math.PI / 2;
-        road.position.set(x, 0.025, z);
-        scene.add(road);
-    }
-
-    function addCityBlock(centerX, centerZ) {
-        const sidewalkColor = 0xb6b6b0;
-        const buildingColors = [
-            0x9b9ca5,
-            0xb9a38b,
-            0x777f8b,
-            0xc5c5c0,
-            0x8d9996,
-            0xa98f87
-        ];
-
-        const blockSize = 18;
-
-        // Земля квартала.
-        addBox(
-            centerX,
-            -0.15,
-            centerZ,
-            blockSize,
-            0.3,
-            blockSize,
-            0x66805a
-        );
-
-        // Тротуар вокруг квартала.
-        addBox(
-            centerX,
-            0.02,
-            centerZ - 8.5,
-            18,
-            0.12,
-            1.5,
-            sidewalkColor
-        );
-
-        addBox(
-            centerX,
-            0.02,
-            centerZ + 8.5,
-            18,
-            0.12,
-            1.5,
-            sidewalkColor
-        );
-
-        addBox(
-            centerX - 8.5,
-            0.02,
-            centerZ,
-            1.5,
-            0.12,
-            18,
-            sidewalkColor
-        );
-
-        addBox(
-            centerX + 8.5,
-            0.02,
-            centerZ,
-            1.5,
-            0.12,
-            18,
-            sidewalkColor
-        );
-
-        // Несколько зданий внутри квартала.
-        const spots = [
-            [-4.5, -4.5],
-            [4.5, -4.5],
-            [-4.5, 4.5],
-            [4.5, 4.5]
-        ];
-
-        spots.forEach((spot, index) => {
-            const width = 5 + (index % 2);
-            const depth = 5;
-            const height = 6 + ((index * 7) % 10);
-            const bx = centerX + spot[0];
-            const bz = centerZ + spot[1];
-
-            addBox(
-                bx,
-                0,
-                bz,
-                width,
-                height,
-                depth,
-                buildingColors[index % buildingColors.length]
-            );
-
-            // Крыша.
-            addBox(
-                bx,
-                height,
-                bz,
-                width + 0.2,
-                0.25,
-                depth + 0.2,
-                0x454953
-            );
-
-            // Окна на фасаде.
-            for (let floor = 1.5; floor < height - 1; floor += 2) {
-                for (let column = -1; column <= 1; column++) {
-                    const windowMesh = new THREE.Mesh(
-                        new THREE.BoxGeometry(0.7, 0.9, 0.08),
-                        new THREE.MeshStandardMaterial({
-                            color: 0xffd995,
-                            emissive: 0x44351b
-                        })
-                    );
-
-                    windowMesh.position.set(
-                        bx + column * 1.3,
-                        floor,
-                        bz + depth / 2 + 0.06
-                    );
-
-                    scene.add(windowMesh);
-                }
-            }
-        });
-    }
-
-    function createCity() {
-        // Большая территория.
-        const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(240, 240),
-            new THREE.MeshStandardMaterial({
-                color: 0x58784d,
-                roughness: 1
-            })
-        );
-
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -0.03;
-        scene.add(ground);
-
-        // Сетка улиц: две основные дороги и несколько кварталов.
-        const roadWidth = 10;
-        const blockStep = 28;
-
-        for (let i = -3; i <= 3; i++) {
-            addRoad(i * blockStep, 0, roadWidth, 220);
-            addRoad(0, i * blockStep, 220, roadWidth);
+    function makeWorld() {
+        for (let i = 0; i < 450; i++) {
+            decorations.push({
+                x: random(0, CONFIG.worldWidth),
+                y: random(0, CONFIG.worldHeight),
+                size: random(2, 7),
+                color: Math.random() > 0.5 ? "#263d36" : "#30463c"
+            });
         }
 
-        // Разметка на дорогах.
-        const lineMaterial = new THREE.MeshStandardMaterial({
-            color: 0xf1d77b,
-            emissive: 0x29210c
-        });
+        const blockSize = 175;
+        const gap = 80;
 
-        for (let z = -105; z <= 105; z += 7) {
-            const dash = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.18, 3),
-                lineMaterial
-            );
-
-            dash.rotation.x = -Math.PI / 2;
-            dash.position.set(0, 0.045, z);
-            scene.add(dash);
-        }
-
-        for (let x = -105; x <= 105; x += 7) {
-            const dash = new THREE.Mesh(
-                new THREE.PlaneGeometry(3, 0.18),
-                lineMaterial
-            );
-
-            dash.rotation.x = -Math.PI / 2;
-            dash.position.set(x, 0.05, 0);
-            scene.add(dash);
-        }
-
-        // Кварталы по обе стороны дорог.
-        for (let x = -2; x <= 2; x++) {
-            for (let z = -2; z <= 2; z++) {
-                if (x === 0 && z === 0) continue;
-
-                addCityBlock(
-                    x * blockStep + (x > 0 ? 0 : 0),
-                    z * blockStep + (z > 0 ? 0 : 0)
-                );
-            }
-        }
-
-        // Фонари вдоль главных дорог.
-        for (let p = -4; p <= 4; p++) {
-            for (const side of [-1, 1]) {
-                addStreetLamp(side * 7, p * 22);
-                addStreetLamp(p * 22, side * 7);
-            }
-        }
-    }
-
-    function addStreetLamp(x, z) {
-        const poleMaterial = new THREE.MeshStandardMaterial({
-            color: 0x353a42,
-            metalness: 0.6,
-            roughness: 0.5
-        });
-
-        const pole = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.09, 0.13, 4, 8),
-            poleMaterial
-        );
-
-        pole.position.set(x, 2, z);
-        scene.add(pole);
-
-        const bulb = new THREE.Mesh(
-            new THREE.SphereGeometry(0.22, 8, 8),
-            new THREE.MeshStandardMaterial({
-                color: 0xffe3a1,
-                emissive: 0xffb84d,
-                emissiveIntensity: 1.2
-            })
-        );
-
-        bulb.position.set(x, 4.05, z);
-        scene.add(bulb);
-    }
-
-    function createWorld() {
-        if (typeof THREE === "undefined") {
-            $("menuConnection").textContent =
-                "Ошибка: Three.js не загрузился";
-            return false;
-        }
-
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x9aafc9);
-        scene.fog = new THREE.Fog(0x9aafc9, 45, 190);
-
-        camera = new THREE.PerspectiveCamera(
-            75,
-            window.innerWidth / window.innerHeight,
-            0.1,
-            500
-        );
-
-        camera.position.set(
-            state.position.x,
-            1.65,
-            state.position.z
-        );
-
-        camera.rotation.order = "YXZ";
-
-        renderer = new THREE.WebGLRenderer({
-            antialias: true,
-            powerPreference: "high-performance"
-        });
-
-        renderer.setPixelRatio(
-            Math.min(window.devicePixelRatio || 1, 1.5)
-        );
-
-        renderer.setSize(
-            window.innerWidth,
-            window.innerHeight
-        );
-
-        renderer.domElement.id = "gameCanvas";
-        document.body.insertBefore(
-            renderer.domElement,
-            document.body.firstChild
-        );
-
-        scene.add(
-            new THREE.HemisphereLight(0xdceaff, 0x414a35, 2)
-        );
-
-        const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-        sun.position.set(30, 45, 20);
-        scene.add(sun);
-
-        createCity();
-
-        clock = new THREE.Clock();
-
-        return true;
-                }
-        function createPlayerModel(color = 0xff665c) {
-        const group = new THREE.Group();
-
-        const body = new THREE.Mesh(
-            new THREE.BoxGeometry(0.65, 1.1, 0.35),
-            new THREE.MeshStandardMaterial({ color })
-        );
-
-        body.position.y = 0.85;
-        group.add(body);
-
-        const head = new THREE.Mesh(
-            new THREE.SphereGeometry(0.25, 12, 10),
-            new THREE.MeshStandardMaterial({ color: 0xf0c7a0 })
-        );
-
-        head.position.y = 1.55;
-        group.add(head);
-
-        const legMaterial = new THREE.MeshStandardMaterial({
-            color: 0x29334d
-        });
-
-        for (const x of [-0.18, 0.18]) {
-            const leg = new THREE.Mesh(
-                new THREE.BoxGeometry(0.2, 0.55, 0.22),
-                legMaterial
-            );
-
-            leg.position.set(x, 0.28, 0);
-            group.add(leg);
-        }
-
-        return group;
-    }
-
-    function addPlayer(id, data = {}) {
-        if (!scene || id == null) return;
-
-        const key = String(id);
-
-        if (state.myId != null && key === String(state.myId)) {
-            return;
-        }
-
-        if (state.players.has(key)) {
-            updatePlayer(id, data);
-            return;
-        }
-
-        const model = createPlayerModel();
-
-        model.position.set(
-            Number(data.x) || 0,
-            0,
-            Number(data.z) || 0
-        );
-
-        scene.add(model);
-
-        state.players.set(key, {
-            model,
-            name: data.name || "Игрок",
-            health: Number(data.health ?? 100)
-        });
-    }
-
-    function updatePlayer(id, data = {}) {
-        const key = String(id);
-        const player = state.players.get(key);
-
-        if (!player) {
-            addPlayer(id, data);
-            return;
-        }
-
-        if (Number.isFinite(Number(data.x))) {
-            player.model.position.x = Number(data.x);
-        }
-
-        if (Number.isFinite(Number(data.z))) {
-            player.model.position.z = Number(data.z);
-        }
-
-        if (Number.isFinite(Number(data.rotation))) {
-            player.model.rotation.y = Number(data.rotation);
-        }
-
-        if (data.name) player.name = data.name;
-
-        if (data.health !== undefined) {
-            player.health = Number(data.health) || 0;
-        }
-    }
-
-    function removePlayer(id) {
-        const key = String(id);
-        const player = state.players.get(key);
-
-        if (!player) return;
-
-        scene.remove(player.model);
-        state.players.delete(key);
-    }
-
-    function sendServer(data) {
-        if (
-            state.socket &&
-            state.socket.readyState === WebSocket.OPEN
+        for (
+            let x = 100;
+            x < CONFIG.worldWidth - blockSize;
+            x += blockSize + gap
         ) {
-            state.socket.send(JSON.stringify(data));
+            for (
+                let y = 100;
+                y < CONFIG.worldHeight - blockSize;
+                y += blockSize + gap
+            ) {
+                if (Math.random() < 0.25) continue;
+
+                buildings.push({
+                    x,
+                    y,
+                    w: random(95, blockSize),
+                    h: random(95, blockSize),
+                    color: ["#41495a", "#4c5364", "#3c4657"][
+                        Math.floor(Math.random() * 3)
+                    ]
+                });
+            }
+        }
+    }
+
+    function circleRectCollision(x, y, radius, rect) {
+        const nearestX = clamp(x, rect.x, rect.x + rect.w);
+        const nearestY = clamp(y, rect.y, rect.y + rect.h);
+
+        return Math.hypot(x - nearestX, y - nearestY) < radius;
+    }
+
+    function blocked(x, y, radius) {
+        if (
+            x < radius ||
+            y < radius ||
+            x > CONFIG.worldWidth - radius ||
+            y > CONFIG.worldHeight - radius
+        ) {
             return true;
         }
 
-        return false;
+        return buildings.some(building =>
+            circleRectCollision(x, y, radius, building)
+        );
     }
 
-    function connectToServer() {
-        let url = CONFIG.serverUrl.trim();
+    function movePlayer(dx, dy) {
+        const nextX = player.x + dx;
+        const nextY = player.y + dy;
 
-        if (!url) {
-            const protocol = location.protocol === "https:"
-                ? "wss:"
-                : "ws:";
-
-            url = `${protocol}//${location.host}`;
+        if (!blocked(nextX, player.y, player.radius)) {
+            player.x = nextX;
         }
 
-        let socket;
+        if (!blocked(player.x, nextY, player.radius)) {
+            player.y = nextY;
+        }
+    }
 
-        try {
-            socket = new WebSocket(url);
-        } catch (error) {
-            state.connected = false;
-            updateInterface();
-            showMessage("Не удалось подключиться к серверу");
+    function spawnEnemy() {
+        if (enemies.length >= 35) return;
+
+        let x = player.x;
+        let y = player.y;
+
+        for (let i = 0; i < 20; i++) {
+            const angle = random(0, Math.PI * 2);
+            const radius = random(330, 550);
+
+            x = clamp(
+                player.x + Math.cos(angle) * radius,
+                30,
+                CONFIG.worldWidth - 30
+            );
+
+            y = clamp(
+                player.y + Math.sin(angle) * radius,
+                30,
+                CONFIG.worldHeight - 30
+            );
+
+            if (!blocked(x, y, 16)) break;
+        }
+
+        const tough = Math.random() < 0.18;
+        const hp = tough ? 90 : 45;
+
+        enemies.push({
+            x,
+            y,
+            radius: tough ? 19 : 15,
+            health: hp,
+            maxHealth: hp,
+            speed: tough ? 75 : random(65, 100),
+            damage: tough ? 13 : 7,
+            attackTimer: 0,
+            color: tough ? "#c45bff" : "#ff596b",
+            xp: tough ? 30 : 15,
+            coins: tough ? 18 : 8
+        });
+    }
+
+    function shoot() {
+        if (!gameStarted || player.dead) return;
+
+        const weapon = weapons[player.weapon];
+
+        if (player.fireTimer > 0) return;
+
+        player.fireTimer = weapon.delay;
+
+        for (let i = 0; i < weapon.pellets; i++) {
+            const angle = player.angle + random(
+                -weapon.spread,
+                weapon.spread
+            );
+
+            bullets.push({
+                x: player.x + Math.cos(angle) * 24,
+                y: player.y + Math.sin(angle) * 24,
+                vx: Math.cos(angle) * weapon.speed,
+                vy: Math.sin(angle) * weapon.speed,
+                damage: weapon.damage + player.damageBonus,
+                radius: weapon.pellets > 1 ? 4 : 5,
+                life: 1.5,
+                color: weapon.color
+            });
+        }
+
+        makeParticles(
+            player.x + Math.cos(player.angle) * 24,
+            player.y + Math.sin(player.angle) * 24,
+            weapon.color,
+            4
+        );
+    }
+
+    function makeParticles(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            const angle = random(0, Math.PI * 2);
+            const speed = random(30, 160);
+
+            particles.push({
+                x,
+                y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: random(0.15, 0.4),
+                color,
+                radius: random(2, 5)
+            });
+        }
+    }
+
+    function gainXP(amount) {
+        player.xp += amount;
+
+        while (player.xp >= player.xpNext) {
+            player.xp -= player.xpNext;
+            player.level++;
+            player.xpNext = Math.floor(player.xpNext * 1.35);
+            player.maxHealth += 10;
+            player.health = player.maxHealth;
+
+            showMessage("Новый уровень: " + player.level + "!");
+        }
+    }
+
+    function damageEnemy(enemy, damage) {
+        enemy.health -= damage;
+
+        makeParticles(enemy.x, enemy.y, enemy.color, 5);
+
+        if (enemy.health <= 0) {
+            const index = enemies.indexOf(enemy);
+
+            if (index !== -1) enemies.splice(index, 1);
+
+            player.coins += enemy.coins;
+            gainXP(enemy.xp);
+
+            makeParticles(enemy.x, enemy.y, "#ffd66e", 12);
+            showMessage("+" + enemy.coins + " монет");
+        }
+    }
+
+    function useSuper() {
+        if (!gameStarted || player.dead) return;
+
+        const active = Object.keys(supers).find(
+            key => supers[key].owned
+        );
+
+        if (!active) {
+            showMessage("Купи суперспособность в магазине!");
             return;
         }
 
-        state.socket = socket;
-        state.connected = false;
-        updateInterface();
+        if (player.superTimer > 0) {
+            showMessage("Способность ещё перезаряжается");
+            return;
+        }
 
-        socket.addEventListener("open", () => {
-            if (state.socket !== socket) return;
-
-            state.connected = true;
-
-            sendServer({
-                type: "join",
-                name: state.name
-            });
-
-            updateInterface();
-            showMessage("Соединение установлено");
-        });
-
-        socket.addEventListener("message", event => {
-            if (state.socket !== socket) return;
-
-            let data;
-
-            try {
-                data = JSON.parse(event.data);
-            } catch (_) {
-                return;
+        if (active === "blast") {
+            for (const enemy of [...enemies]) {
+                if (distance(player, enemy) < 260) {
+                    damageEnemy(enemy, 100 + player.damageBonus);
+                }
             }
 
-            handleServerMessage(data);
-        });
+            makeParticles(player.x, player.y, "#bc66ff", 45);
+            showMessage("СУПЕРУДАР!");
+        }
 
-        socket.addEventListener("close", () => {
-            if (state.socket !== socket) return;
+        if (active === "dash") {
+            player.dashTimer = 0.35;
+            player.invulnerable = 1;
 
-            state.connected = false;
-            updateInterface();
+            makeParticles(player.x, player.y, "#5fffe1", 25);
+            showMessage("РЫВОК!");
+        }
 
-            if (state.started) {
-                showMessage("Связь с сервером потеряна");
+        if (active === "storm") {
+            for (const enemy of [...enemies]) {
+                if (distance(player, enemy) < 520) {
+                    damageEnemy(enemy, 180 + player.damageBonus);
+                    makeParticles(enemy.x, enemy.y, "#63caff", 14);
+                }
             }
-        });
 
-        socket.addEventListener("error", () => {
-            if (state.socket !== socket) return;
+            makeParticles(player.x, player.y, "#63caff", 60);
+            showMessage("ЭЛЕКТРОШОК!");
+        }
 
-            state.connected = false;
-            updateInterface();
-        });
+        player.superTimer = supers[active].cooldown;
+        updateHUD();
     }
 
-    function handleServerMessage(data) {
-        if (!data || typeof data !== "object") return;
+    function update(dt) {
+        if (!gameStarted || player.dead) return;
 
-        switch (data.type) {
-            case "welcome": {
-                if (data.id != null) {
-                    state.myId = data.id;
-                }
+        player.fireTimer = Math.max(0, player.fireTimer - dt);
+        player.superTimer = Math.max(0, player.superTimer - dt);
+        player.invulnerable = Math.max(0, player.invulnerable - dt);
 
-                if (Number.isFinite(Number(data.x))) {
-                    state.position.x = Number(data.x);
-                }
+        if (player.dashTimer > 0) {
+            player.dashTimer -= dt;
 
-                if (Number.isFinite(Number(data.z))) {
-                    state.position.z = Number(data.z);
-                }
+            movePlayer(
+                Math.cos(player.angle) * 900 * dt,
+                Math.sin(player.angle) * 900 * dt
+            );
+        } else {
+            let dx = 0;
+            let dy = 0;
 
-                if (Number.isFinite(Number(data.rotation))) {
-                    state.yaw = Number(data.rotation);
-                }
+            if (keys.w || keys.arrowup) dy -= 1;
+            if (keys.s || keys.arrowdown) dy += 1;
+            if (keys.a || keys.arrowleft) dx -= 1;
+            if (keys.d || keys.arrowright) dx += 1;
 
-                if (data.health !== undefined) {
-                    state.health = Number(data.health);
-                }
+            dx += joystickX;
+            dy += joystickY;
 
-                if (data.maxHealth !== undefined) {
-                    state.maxHealth = Number(data.maxHealth) || 100;
-                }
+            const length = Math.hypot(dx, dy);
 
-                if (data.level !== undefined) {
-                    state.level = Number(data.level) || 1;
-                }
-
-                if (data.coins !== undefined) {
-                    state.coins = Number(data.coins) || 0;
-                }
-
-                if (data.xp !== undefined) {
-                    state.xp = Number(data.xp) || 0;
-                }
-
-                if (Array.isArray(data.players)) {
-                    data.players.forEach(player => {
-                        if (player.id != null) {
-                            addPlayer(player.id, player);
-                        }
-                    });
-                }
-
-                updateInterface();
-                break;
+            if (length > 1) {
+                dx /= length;
+                dy /= length;
             }
 
-            case "state":
-            case "update": {
-                if (data.health !== undefined) {
-                    state.health = Number(data.health) || 0;
+            movePlayer(
+                dx * player.speed * dt,
+                dy * player.speed * dt
+            );
+        }
+
+        if (shooting || keys[" "]) shoot();
+
+        spawnTimer += dt;
+
+        if (spawnTimer >= CONFIG.enemySpawnTime) {
+            spawnTimer = 0;
+            spawnEnemy();
+        }
+
+        for (const enemy of [...enemies]) {
+            const dx = player.x - enemy.x;
+            const dy = player.y - enemy.y;
+            const dist = Math.hypot(dx, dy) || 1;
+
+            if (dist > enemy.radius + player.radius + 3) {
+                const speed = enemy.speed * dt;
+                const nx = enemy.x + dx / dist * speed;
+                const ny = enemy.y + dy / dist * speed;
+
+                if (!blocked(nx, enemy.y, enemy.radius)) {
+                    enemy.x = nx;
                 }
 
-                if (data.maxHealth !== undefined) {
-                    state.maxHealth = Number(data.maxHealth) || 100;
+                if (!blocked(enemy.x, ny, enemy.radius)) {
+                    enemy.y = ny;
                 }
+            } else {
+                enemy.attackTimer -= dt;
 
-                if (data.level !== undefined) {
-                    state.level = Number(data.level) || 1;
+                if (enemy.attackTimer <= 0 && player.invulnerable <= 0) {
+                    enemy.attackTimer = 0.8;
+                    player.health -= enemy.damage;
+
+                    makeParticles(player.x, player.y, "#ff596b", 5);
+
+                    if (player.health <= 0) {
+                        player.health = 0;
+                        player.dead = true;
+                        shooting = false;
+
+                        showMessage("Ты проиграл!");
+                        $("menu").classList.remove("hidden");
+                        $("startButton").textContent = "ИГРАТЬ СНОВА";
+                    }
                 }
+            }
+        }
 
-                if (data.coins !== undefined) {
-                    state.coins = Number(data.coins) || 0;
-                }
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            const bullet = bullets[i];
 
-                if (data.xp !== undefined) {
-                    state.xp = Number(data.xp) || 0;
-                }
+            bullet.x += bullet.vx * dt;
+            bullet.y += bullet.vy * dt;
+            bullet.life -= dt;
 
-                const players = Array.isArray(data.players)
-                    ? data.players
-                    : data.players && typeof data.players === "object"
-                        ? Object.entries(data.players).map(([id, player]) => ({
-                            id,
-                            ...player
-                        }))
-                        : [];
+            let remove = bullet.life <= 0 ||
+                blocked(bullet.x, bullet.y, bullet.radius);
 
-                players.forEach(player => {
-                    if (player.id == null) return;
-
+            if (!remove) {
+                for (const enemy of [...enemies]) {
                     if (
-                        state.myId != null &&
-                        String(player.id) === String(state.myId)
+                        distance(bullet, enemy) <
+                        enemy.radius + bullet.radius
                     ) {
-                        // Не перезаписываем локальное движение:
-                        // иначе игрок может дёргаться назад.
+                        damageEnemy(enemy, bullet.damage);
+                        remove = true;
+                        break;
+                    }
+                }
+            }
+
+            if (remove) bullets.splice(i, 1);
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.life -= dt;
+
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+
+        cameraX = clamp(
+            player.x - innerWidth / 2,
+            0,
+            CONFIG.worldWidth - innerWidth
+        );
+
+        cameraY = clamp(
+            player.y - innerHeight / 2,
+            0,
+            CONFIG.worldHeight - innerHeight
+        );
+
+        if (messageTimer > 0) {
+            messageTimer -= dt;
+
+            if (messageTimer <= 0) {
+                $("message").style.opacity = "0";
+            }
+        }
+
+        updateHUD();
+    }
+
+    function draw() {
+        const w = innerWidth;
+        const h = innerHeight;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#263b32";
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.save();
+        ctx.translate(-cameraX, -cameraY);
+
+        drawWorld();
+        drawBuildings();
+        drawEnemies();
+        drawBullets();
+        drawPlayer();
+        drawParticles();
+
+        ctx.restore();
+
+        drawMinimap();
+    }
+
+    function drawWorld() {
+        ctx.fillStyle = "#30483b";
+        ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+
+        ctx.fillStyle = "#3b414b";
+
+        for (let x = 0; x < CONFIG.worldWidth; x += 255) {
+            ctx.fillRect(x, 0, 75, CONFIG.worldHeight);
+        }
+
+        for (let y = 0; y < CONFIG.worldHeight; y += 255) {
+            ctx.fillRect(0, y, CONFIG.worldWidth, 75);
+        }
+
+        ctx.strokeStyle = "#d3bf70";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([18, 20]);
+
+        for (let x = 0; x < CONFIG.worldWidth; x += 255) {
+            ctx.beginPath();
+            ctx.moveTo(x + 37, 0);
+            ctx.lineTo(x + 37, CONFIG.worldHeight);
+            ctx.stroke();
+        }
+
+        for (let y = 0; y < CONFIG.worldHeight; y += 255) {
+            ctx.beginPath();
+            ctx.moveTo(0, y + 37);
+            ctx.lineTo(CONFIG.worldWidth, y + 37);
+            ctx.stroke();
+        }
+
+        ctx.setLineDash([]);
+
+        for (const d of decorations) {
+            ctx.fillStyle = d.color;
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function drawBuildings() {
+        for (const b of buildings) {
+            ctx.fillStyle = "#20252d";
+            ctx.fillRect(b.x + 7, b.y + 9, b.w, b.h);
+
+            ctx.fillStyle = b.color;
+            ctx.fillRect(b.x, b.y, b.w, b.h);
+
+            ctx.fillStyle = "#66778b";
+
+            for (let x = b.x + 14; x < b.x + b.w - 10; x += 29) {
+                for (let y = b.y + 14; y < b.y + b.h - 10; y += 29) {
+                    ctx.fillRect(x, y, 13, 12);
+                }
+            }
+
+            ctx.fillStyle = "#272e3a";
+            ctx.fillRect(b.x + b.w / 2 - 10, b.y + b.h - 25, 20, 25);
+        }
+    }
+
+    function drawHealthBar(x, y, width, health, maxHealth) {
+        ctx.fillStyle = "#181b22";
+        ctx.fillRect(x - width / 2, y, width, 5);
+
+        ctx.fillStyle = "#53e18c";
+        ctx.fillRect(
+            x - width / 2,
+            y,
+            width * clamp(health / maxHealth, 0, 1),
+            5
+        );
+    }
+
+    function drawEnemies() {
+        for (const enemy of enemies) {
+            ctx.fillStyle = "#16192388";
+            ctx.beginPath();
+            ctx.ellipse(
+                enemy.x,
+                enemy.y + 5,
+                enemy.radius + 5,
+                enemy.radius * 0.7,
+                0,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+
+            ctx.fillStyle = enemy.color;
+            ctx.beginPath();
+            ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(enemy.x - 5, enemy.y - 3, 3, 0, Math.PI * 2);
+            ctx.arc(enemy.x + 5, enemy.y - 3, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            drawHealthBar(
+                enemy.x,
+                enemy.y - enemy.radius - 11,
+                36,
+                enemy.health,
+                enemy.maxHealth
+            );
+        }
+    }
+
+    function drawPlayer() {
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.rotate(player.angle);
+
+        ctx.fillStyle = "#151a26";
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius + 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = player.invulnerable > 0
+            ? "#5fffe1"
+            : "#6e91ff";
+
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#dce7ff";
+        ctx.fillRect(5, -5, 25, 10);
+
+        ctx.fillStyle = "#26365f";
+        ctx.fillRect(5, -3, 20, 6);
+
+        ctx.restore();
+
+        drawHealthBar(
+            player.x,
+            player.y - 31,
+            48,
+            player.health,
+            player.maxHealth
+        );
+    }
+
+    function drawBullets() {
+        for (const b of bullets) {
+            ctx.fillStyle = b.color;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            ctx.globalAlpha = clamp(p.life * 3, 0, 1);
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+    }
+
+    function drawMinimap() {
+        const size = 105;
+        const x = innerWidth - size - 12;
+        const y = 64;
+
+        ctx.fillStyle = "#101522dd";
+        ctx.fillRect(x, y, size, size);
+
+        const sx = size / CONFIG.worldWidth;
+        const sy = size / CONFIG.worldHeight;
+
+        ctx.fillStyle = "#6d7787";
+
+        for (const b of buildings) {
+            ctx.fillRect(
+                x + b.x * sx,
+                y + b.y * sy,
+                Math.max(1, b.w * sx),
+                Math.max(1, b.h * sy)
+            );
+        }
+
+        ctx.fillStyle = "#75a0ff";
+        ctx.beginPath();
+        ctx.arc(
+            x + player.x * sx,
+            y + player.y * sy,
+            3,
+            0,
+            Math.PI * 2
+        );
+        ctx.fill();
+
+        ctx.fillStyle = "#ff596b";
+
+        for (const enemy of enemies) {
+            ctx.fillRect(
+                x + enemy.x * sx - 1,
+                y + enemy.y * sy - 1,
+                3,
+                3
+            );
+        }
+    }
+
+    function updateHUD() {
+        $("health").textContent =
+            Math.ceil(player.health) + " / " + player.maxHealth;
+
+        $("coins").textContent = player.coins;
+        $("level").textContent = "Ур. " + player.level;
+        $("shopCoins").textContent = player.coins;
+
+        $("weaponName").textContent = weapons[player.weapon].name;
+        $("ammo").textContent = "Бесконечные патроны";
+
+        const active = Object.values(supers).find(item => item.owned);
+
+        $("superName").textContent = active
+            ? active.name
+            : "Суперспособность";
+
+        $("superStatus").textContent = !active
+            ? "Не куплено"
+            : player.superTimer > 0
+                ? "Перезарядка: " + player.superTimer.toFixed(1) + " с"
+                : "Готово!";
+
+        $("superButton").style.opacity =
+            active && player.superTimer <= 0 ? "1" : ".75";
+    }
+
+    function renderShop() {
+        const container = $("shopItems");
+        container.innerHTML = "";
+
+        function addItem(name, description, price, action, owned) {
+            const row = document.createElement("div");
+            row.className = "shopItem";
+
+            const info = document.createElement("div");
+            const title = document.createElement("strong");
+            const desc = document.createElement("small");
+
+            title.textContent = name;
+            desc.textContent = description;
+
+            info.append(title, desc);
+
+            const button = document.createElement("button");
+            button.textContent = owned ? "КУПЛЕНО" : price + " 🪙";
+            button.disabled = owned;
+            button.style.opacity = owned ? ".55" : "1";
+
+            button.addEventListener("click", () => {
+                if (!owned) action();
+            });
+
+            row.append(info, button);
+            container.appendChild(row);
+        }
+
+        Object.entries(weapons).forEach(([id, weapon]) => {
+            addItem(
+                weapon.name,
+                weapon.description,
+                weapon.price,
+                () => {
+                    if (player.coins < weapon.price) {
+                        showMessage("Недостаточно монет!");
                         return;
                     }
 
-                    updatePlayer(player.id, player);
-                });
+                    player.coins -= weapon.price;
+                    weapon.owned = true;
+                    player.weapon = id;
 
-                updateInterface();
-                break;
-            }
+                    renderShop();
+                    updateHUD();
+                    showMessage("Оружие куплено!");
+                },
+                weapon.owned
+            );
+        });
 
-            case "playerJoined": {
-                const player = data.player || data;
-
-                if (player.id != null) {
-                    addPlayer(player.id, player);
+        addItem(
+            "Улучшение урона",
+            "+5 урона за выстрел",
+            80,
+            () => {
+                if (player.coins < 80) {
+                    showMessage("Недостаточно монет!");
+                    return;
                 }
 
-                break;
-            }
+                player.coins -= 80;
+                player.damageBonus += 5;
 
-            case "playerLeft": {
-                if (data.id != null) {
-                    removePlayer(data.id);
-                }
-
-                break;
-            }
-
-            case "damage": {
-                if (data.health !== undefined) {
-                    state.health = Math.max(
-                        0,
-                        Number(data.health) || 0
-                    );
-                }
-
-                updateInterface();
-                showMessage(data.message || "Получен урон");
-                break;
-            }
-
-            case "levelUp": {
-                if (data.level !== undefined) {
-                    state.level = Number(data.level) || state.level;
-                }
-
-                updateInterface();
-                showMessage("Новый уровень!");
-                break;
-            }
-
-            case "error": {
-                showMessage(data.message || "Ошибка сервера", 4000);
-                break;
-            }
-
-            default: {
-                if (data.id != null) {
-                    updatePlayer(data.id, data);
-                }
-            }
-        }
-    }
-
-    function startGame() {
-        if (state.started) return;
-
-        const input = $("playerNameInput");
-        const name = input ? input.value.trim() : "";
-
-        if (!name) {
-            $("menuConnection").textContent = "Сначала введи имя";
-            input?.focus();
-            return;
-        }
-
-        state.name = name.slice(0, 20);
-        state.started = true;
-
-        $("gameMenu").style.display = "none";
-        $("gameUI").style.display = "block";
-
-        camera.position.set(
-            state.position.x,
-            1.65,
-            state.position.z
+                renderShop();
+                updateHUD();
+                showMessage("Урон увеличен!");
+            },
+            false
         );
 
-        camera.rotation.set(state.pitch, state.yaw, 0);
+        addItem(
+            "Улучшение здоровья",
+            "+25 к максимальному здоровью",
+            70,
+            () => {
+                if (player.coins < 70) {
+                    showMessage("Недостаточно монет!");
+                    return;
+                }
 
-        updateInterface();
-        connectToServer();
+                player.coins -= 70;
+                player.maxHealth += 25;
+                player.health = Math.min(
+                    player.maxHealth,
+                    player.health + 25
+                );
 
-        showMessage("Добро пожаловать, " + state.name + "!");
+                renderShop();
+                updateHUD();
+                showMessage("Здоровье увеличено!");
+            },
+            false
+        );
+
+        addItem(
+            "Ускорение",
+            "+25 к скорости движения",
+            90,
+            () => {
+                if (player.coins < 90) {
+                    showMessage("Недостаточно монет!");
+                    return;
+                }
+
+                player.coins -= 90;
+                player.speed += 25;
+
+                renderShop();
+                updateHUD();
+                showMessage("Скорость увеличена!");
+            },
+            false
+        );
+
+        Object.entries(supers).forEach(([id, ability]) => {
+            addItem(
+                "⚡ " + ability.name,
+                ability.description + " · Перезарядка " +
+                    ability.cooldown + " с",
+                ability.price,
+                () => {
+                    if (player.coins < ability.price) {
+                        showMessage("Недостаточно монет!");
+                        return;
+                    }
+
+                    player.coins -= ability.price;
+                    ability.owned = true;
+
+                    renderShop();
+                    updateHUD();
+                    showMessage("Суперспособность куплена!");
+                },
+                ability.owned
+            );
+        });
     }
 
     function openShop() {
-        if (!state.started) return;
-
-        $("shopPanel").style.display = "block";
-        updateInterface();
+        $("shop").classList.remove("hidden");
+        renderShop();
     }
 
     function closeShop() {
-        $("shopPanel").style.display = "none";
+        $("shop").classList.add("hidden");
     }
 
-    function buyUpgrade(type, price) {
-        if (state.coins < price) {
-            showMessage("Недостаточно монет!");
+    function startGame() {
+        if (gameStarted && !player.dead) {
+            $("menu").classList.add("hidden");
             return;
         }
 
-        if (!state.connected) {
-            showMessage("Покупки требуют подключения к серверу");
-            return;
+        if (player.dead) {
+            player.x = CONFIG.worldWidth / 2;
+            player.y = CONFIG.worldHeight / 2;
+            player.health = player.maxHealth;
+            player.dead = false;
+
+            bullets.length = 0;
+            enemies.length = 0;
+            particles.length = 0;
         }
 
-        sendServer({
-            type: "buy",
-            item: type,
-            price
-        });
-                }
-        function setupControls() {
-        const joystick = $("joystick");
-        const joystickKnob = $("joystickKnob");
-        const lookZone = $("lookZone");
-        const attackButton = $("attackButton");
-        const startButton = $("startButton");
-        const shopButton = $("shopButton");
-        const closeShopButton = $("closeShopButton");
+        gameStarted = true;
 
-        let joystickPointer = null;
-        let lookPointer = null;
-        let joystickRect = null;
+        const name = $("playerName").value.trim();
+        player.name = name || "Игрок";
 
-        function updateJoystick(event) {
-            if (joystickPointer !== event.pointerId) return;
+        $("menu").classList.add("hidden");
+        updateHUD();
 
-            const rect = joystick.getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            const maxDistance = rect.width * 0.31;
-
-            let dx = event.clientX - centerX;
-            let dy = event.clientY - centerY;
-
-            const distance = Math.hypot(dx, dy);
-
-            if (distance > maxDistance) {
-                dx = dx / distance * maxDistance;
-                dy = dy / distance * maxDistance;
-            }
-
-            state.moveX = dx / maxDistance;
-            state.moveZ = dy / maxDistance;
-
-            joystickKnob.style.transform =
-                `translate(${dx}px, ${dy}px)`;
-        }
-
-        function resetJoystick(event) {
-            if (
-                event &&
-                joystickPointer !== null &&
-                event.pointerId !== joystickPointer
-            ) {
-                return;
-            }
-
-            joystickPointer = null;
-            state.moveX = 0;
-            state.moveZ = 0;
-
-            joystickKnob.style.transform = "translate(0, 0)";
-        }
-
-        joystick.addEventListener("pointerdown", event => {
-            if (joystickPointer !== null) return;
-
-            event.preventDefault();
-            joystickPointer = event.pointerId;
-
-            try {
-                joystick.setPointerCapture(event.pointerId);
-            } catch (_) {}
-
-            updateJoystick(event);
-        });
-
-        joystick.addEventListener("pointermove", updateJoystick);
-        joystick.addEventListener("pointerup", resetJoystick);
-        joystick.addEventListener("pointercancel", resetJoystick);
-        joystick.addEventListener("lostpointercapture", resetJoystick);
-
-        lookZone.addEventListener("pointerdown", event => {
-            if (!state.started || lookPointer !== null) return;
-
-            if (event.pointerType === "mouse") return;
-
-            lookPointer = event.pointerId;
-            state.lastTouchX = event.clientX;
-            state.lastTouchY = event.clientY;
-
-            try {
-                lookZone.setPointerCapture(event.pointerId);
-            } catch (_) {}
-        });
-
-        lookZone.addEventListener("pointermove", event => {
-            if (lookPointer !== event.pointerId) return;
-
-            const dx = event.clientX - state.lastTouchX;
-            const dy = event.clientY - state.lastTouchY;
-
-            state.lastTouchX = event.clientX;
-            state.lastTouchY = event.clientY;
-
-            state.yaw -= dx * CONFIG.touchSensitivity;
-            state.pitch -= dy * CONFIG.touchSensitivity;
-
-            state.pitch = Math.max(
-                -1.35,
-                Math.min(1.35, state.pitch)
-            );
-        });
-
-        function stopLooking(event) {
-            if (event && lookPointer !== event.pointerId) return;
-            lookPointer = null;
-        }
-
-        lookZone.addEventListener("pointerup", stopLooking);
-        lookZone.addEventListener("pointercancel", stopLooking);
-        lookZone.addEventListener("lostpointercapture", stopLooking);
-
-        document.addEventListener("pointermove", event => {
-            if (!state.started) return;
-            if (event.pointerType !== "mouse") return;
-            if (document.pointerLockElement !== renderer.domElement) return;
-
-            state.yaw -= event.movementX * CONFIG.mouseSensitivity;
-            state.pitch -= event.movementY * CONFIG.mouseSensitivity;
-
-            state.pitch = Math.max(
-                -1.35,
-                Math.min(1.35, state.pitch)
-            );
-        });
-
-        renderer.domElement.addEventListener("click", () => {
-            if (
-                state.started &&
-                !("ontouchstart" in window) &&
-                document.pointerLockElement !== renderer.domElement
-            ) {
-                renderer.domElement.requestPointerLock?.();
-            }
-        });
-
-        document.addEventListener("keydown", event => {
-            const key = event.key.toLowerCase();
-
-            state.keys[key] = true;
-
-            if (
-                ["w", "a", "s", "d", "arrowup", "arrowdown",
-                 "arrowleft", "arrowright", " "].includes(key)
-            ) {
-                event.preventDefault();
-            }
-
-            if (key === " " && state.started) {
-                attack();
-            }
-
-            if (key === "escape") {
-                closeShop();
-                document.exitPointerLock?.();
-            }
-        });
-
-        document.addEventListener("keyup", event => {
-            state.keys[event.key.toLowerCase()] = false;
-        });
-
-        window.addEventListener("blur", () => {
-            state.keys = {};
-            resetJoystick();
-        });
-
-        attackButton.addEventListener("pointerdown", event => {
-            event.preventDefault();
-            event.stopPropagation();
-            attack();
-        });
-
-        startButton.addEventListener("click", startGame);
-        shopButton.addEventListener("click", openShop);
-        closeShopButton.addEventListener("click", closeShop);
-
-        $("buyDamage").addEventListener("click", () => {
-            buyUpgrade("damage", 50);
-        });
-
-        $("buySpeed").addEventListener("click", () => {
-            buyUpgrade("speed", 75);
-        });
-
-        $("buyHealth").addEventListener("click", () => {
-            buyUpgrade("health", 40);
-        });
-
-        $("playerName").addEventListener("keydown", event => {
-            if (event.key === "Enter") startGame();
-        });
-
-        window.addEventListener("resize", () => {
-            if (!renderer || !camera) return;
-
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-
-            renderer.setSize(
-                window.innerWidth,
-                window.innerHeight
-            );
-        });
+        if (CONFIG.serverUrl) connectServer();
     }
 
-    function attack() {
-        if (!state.started) return;
+    function connectServer() {
+        try {
+            socket = new WebSocket(CONFIG.serverUrl);
 
-        const now = performance.now();
+            socket.addEventListener("open", () => {
+                online = true;
 
-        if (now - state.lastAttack < CONFIG.attackCooldown) return;
+                socket.send(JSON.stringify({
+                    type: "join",
+                    name: player.name
+                }));
 
-        state.lastAttack = now;
-
-        if (state.connected) {
-            sendServer({
-                type: "attack",
-                yaw: state.yaw,
-                pitch: state.pitch
+                showMessage("Подключено к серверу");
             });
-        } else {
-            showMessage("Для нанесения урона нужен сервер");
+
+            socket.addEventListener("close", () => {
+                online = false;
+                showMessage(
+                    "Сервер отключён. Игра продолжается локально."
+                );
+            });
+
+            socket.addEventListener("error", () => {
+                online = false;
+                showMessage("Сервер недоступен");
+            });
+        } catch (error) {
+            online = false;
+            showMessage("Не удалось подключиться к серверу");
         }
     }
 
-    function updateMovement(delta) {
-        if (!state.started) return;
+    $("startButton").addEventListener("click", startGame);
+    $("shopButton").addEventListener("click", openShop);
+    $("closeShop").addEventListener("click", closeShop);
+    $("superButton").addEventListener("click", useSuper);
 
-        let forward = 0;
-        let strafe = 0;
+    $("shootButton").addEventListener("pointerdown", event => {
+        event.preventDefault();
+        shooting = true;
+        shoot();
+    });
 
-        if (state.keys["w"] || state.keys["arrowup"]) forward += 1;
-        if (state.keys["s"] || state.keys["arrowdown"]) forward -= 1;
-        if (state.keys["d"] || state.keys["arrowright"]) strafe += 1;
-        if (state.keys["a"] || state.keys["arrowleft"]) strafe -= 1;
+    $("shootButton").addEventListener("pointerup", () => {
+        shooting = false;
+    });
 
-        forward -= state.moveZ;
-        strafe += state.moveX;
+    $("shootButton").addEventListener("pointercancel", () => {
+        shooting = false;
+    });
 
-        const length = Math.hypot(forward, strafe);
+    $("shootButton").addEventListener("lostpointercapture", () => {
+        shooting = false;
+    });
 
-        if (length > 1) {
-            forward /= length;
-            strafe /= length;
+    $("reloadButton").addEventListener("click", () => {
+        showMessage("У этого оружия бесконечные патроны");
+    });
+
+    const joystick = $("joystick");
+    const stick = $("stick");
+
+    function moveStick(event) {
+        if (joystickPointer !== event.pointerId) return;
+
+        const rect = joystick.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const max = rect.width * 0.34;
+
+        let dx = event.clientX - cx;
+        let dy = event.clientY - cy;
+        const length = Math.hypot(dx, dy);
+
+        if (length > max) {
+            dx = dx / length * max;
+            dy = dy / length * max;
         }
 
-        const speed = state.speed * delta;
+        joystickX = dx / max;
+        joystickY = dy / max;
+        stick.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
 
-        state.position.x += (
-            -Math.sin(state.yaw) * forward +
-            Math.cos(state.yaw) * strafe
-        ) * speed;
+    function stopStick(event) {
+        if (event && event.pointerId !== joystickPointer) return;
 
-        state.position.z += (
-            -Math.cos(state.yaw) * forward -
-            Math.sin(state.yaw) * strafe
-        ) * speed;
+        joystickPointer = null;
+        joystickX = 0;
+        joystickY = 0;
+        stick.style.transform = "translate(0, 0)";
+    }
 
-        camera.position.set(
-            state.position.x,
-            1.65,
-            state.position.z
+    joystick.addEventListener("pointerdown", event => {
+        event.preventDefault();
+
+        if (joystickPointer !== null) return;
+
+        joystickPointer = event.pointerId;
+
+        try {
+            joystick.setPointerCapture(event.pointerId);
+        } catch (_) {}
+
+        moveStick(event);
+    });
+
+    joystick.addEventListener("pointermove", moveStick);
+    joystick.addEventListener("pointerup", stopStick);
+    joystick.addEventListener("pointercancel", stopStick);
+    joystick.addEventListener("lostpointercapture", stopStick);
+
+    canvas.addEventListener("pointerdown", event => {
+        if (!gameStarted || player.dead) return;
+
+        aimPointer = event.pointerId;
+
+        const rect = canvas.getBoundingClientRect();
+        aimX = event.clientX - rect.left;
+        aimY = event.clientY - rect.top;
+
+        player.angle = Math.atan2(
+            aimY + cameraY - player.y,
+            aimX + cameraX - player.x
         );
 
-        camera.rotation.order = "YXZ";
-        camera.rotation.y = state.yaw;
-        camera.rotation.x = state.pitch;
-        camera.rotation.z = 0;
+        if (event.pointerType === "mouse") {
+            shooting = event.button === 0;
 
-        state.networkTimer += delta;
-
-        if (state.connected && state.networkTimer >= 0.05) {
-            state.networkTimer = 0;
-
-            sendServer({
-                type: "move",
-                x: state.position.x,
-                z: state.position.z,
-                yaw: state.yaw,
-                pitch: state.pitch
-            });
+            if (shooting) shoot();
         }
+    });
+
+    canvas.addEventListener("pointermove", event => {
+        if (!gameStarted) return;
+
+        const rect = canvas.getBoundingClientRect();
+        aimX = event.clientX - rect.left;
+        aimY = event.clientY - rect.top;
+
+        player.angle = Math.atan2(
+            aimY + cameraY - player.y,
+            aimX + cameraX - player.x
+        );
+    });
+
+    canvas.addEventListener("pointerup", event => {
+        if (event.pointerId === aimPointer) aimPointer = null;
+
+        if (event.pointerType === "mouse") shooting = false;
+    });
+
+    canvas.addEventListener("pointercancel", () => {
+        aimPointer = null;
+        shooting = false;
+    });
+
+    window.addEventListener("keydown", event => {
+        keys[event.key.toLowerCase()] = true;
+
+        if (event.code === "Space") {
+            event.preventDefault();
+            shooting = true;
+            shoot();
+        }
+
+        if (event.key === "Escape") closeShop();
+    });
+
+    window.addEventListener("keyup", event => {
+        keys[event.key.toLowerCase()] = false;
+
+        if (event.code === "Space") shooting = false;
+    });
+
+    window.addEventListener("blur", () => {
+        shooting = false;
+
+        for (const key in keys) keys[key] = false;
+
+        stopStick();
+    });
+
+    function loop(time) {
+        const dt = Math.min((time - lastTime) / 1000 || 0, 0.04);
+        lastTime = time;
+
+        update(dt);
+        draw();
+
+        requestAnimationFrame(loop);
     }
 
-    function animate() {
-        animationId = requestAnimationFrame(animate);
-
-        if (!renderer || !scene || !camera) return;
-
-        const delta = Math.min(clock.getDelta(), 0.05);
-
-        updateMovement(delta);
-
-        renderer.render(scene, camera);
-    }
-
-    function init() {
-        addStyles();
-        createInterface();
-        createWorld();
-        setupControls();
-        updateInterface();
-        animate();
-    }
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init, {
-            once: true
-        });
-    } else {
-        init();
-    }
+    makeWorld();
+    renderShop();
+    updateHUD();
+    requestAnimationFrame(loop);
 })();
