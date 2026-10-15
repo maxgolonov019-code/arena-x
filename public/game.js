@@ -3,7 +3,7 @@
 
     const CONFIG = {
         serverUrl: "",
-        moveSpeed: 5,
+        moveSpeed: 6,
         mouseSensitivity: 0.004,
         touchSensitivity: 0.006,
         attackDistance: 3,
@@ -28,35 +28,23 @@
         pitch: 0,
         moveX: 0,
         moveZ: 0,
+        position: { x: 0, z: 8 },
         players: new Map(),
         keys: {},
         joystickActive: false,
         lookActive: false,
         lastTouchX: 0,
-        lastTouchY: 0
+        lastTouchY: 0,
+        networkTimer: 0
     };
 
     let scene;
     let camera;
     let renderer;
     let clock;
-    let ground;
-    let playerBody;
     let animationId;
 
-    const $ = (id) => document.getElementById(id);
-
-    function createElement(tag, id, parent = document.body) {
-        let element = $(id);
-
-        if (!element) {
-            element = document.createElement(tag);
-            element.id = id;
-            parent.appendChild(element);
-        }
-
-        return element;
-    }
+    const $ = id => document.getElementById(id);
 
     function addStyles() {
         if ($("gameStyles")) return;
@@ -65,14 +53,36 @@
         style.id = "gameStyles";
 
         style.textContent = `
+            * {
+                box-sizing: border-box;
+                -webkit-tap-highlight-color: transparent;
+            }
+
+            html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                overflow: hidden;
+                background: #111827;
+                color: white;
+                font-family: Arial, sans-serif;
+                touch-action: none;
+                user-select: none;
+            }
+
+            #gameCanvas {
+                position: fixed;
+                inset: 0;
+                z-index: 0;
+                width: 100%;
+                height: 100%;
+            }
+
             #gameUI {
                 position: fixed;
                 inset: 0;
                 z-index: 5;
                 pointer-events: none;
-                color: white;
-                font-family: Arial, sans-serif;
-                user-select: none;
             }
 
             #gameTop {
@@ -81,45 +91,47 @@
                 left: 12px;
                 right: 12px;
                 display: flex;
-                align-items: flex-start;
                 justify-content: space-between;
-                gap: 10px;
+                align-items: flex-start;
             }
 
             #gameStats {
+                min-width: 155px;
                 padding: 10px;
                 border-radius: 12px;
-                background: #10131cce;
-                min-width: 150px;
+                background: #10131cdd;
                 font-size: 13px;
+                line-height: 1.5;
             }
 
             #healthTrack {
                 height: 9px;
-                margin: 6px 0;
-                border-radius: 8px;
                 overflow: hidden;
+                margin: 5px 0;
+                border-radius: 8px;
                 background: #444;
             }
 
             #healthBar {
-                width: 100%;
                 height: 100%;
+                width: 100%;
                 background: #35dc75;
-                transition: width 0.15s;
             }
 
             #connectionStatus {
-                margin-top: 6px;
+                margin-top: 4px;
                 color: #ffd166;
                 font-size: 11px;
             }
 
-            #shopButton,
-            .gameButton {
+            button, input {
+                font: inherit;
+            }
+
+            button {
                 border: 0;
                 border-radius: 10px;
-                padding: 11px 15px;
+                padding: 11px 14px;
                 color: white;
                 background: #596cff;
                 font-weight: bold;
@@ -133,7 +145,7 @@
                 position: absolute;
                 right: 0;
                 top: 0;
-                width: 65%;
+                width: 60%;
                 height: 100%;
                 pointer-events: auto;
                 touch-action: none;
@@ -141,13 +153,13 @@
 
             #joystick {
                 position: absolute;
-                left: 24px;
+                left: 22px;
                 bottom: 28px;
-                width: 120px;
-                height: 120px;
+                width: 116px;
+                height: 116px;
+                border: 2px solid #ffffff88;
                 border-radius: 50%;
-                border: 2px solid #ffffff80;
-                background: #11182788;
+                background: #11182799;
                 pointer-events: auto;
                 touch-action: none;
             }
@@ -156,40 +168,38 @@
                 position: absolute;
                 left: 50%;
                 top: 50%;
-                width: 48px;
-                height: 48px;
-                border-radius: 50%;
-                background: #aebcffdd;
-                border: 2px solid white;
+                width: 46px;
+                height: 46px;
                 transform: translate(-50%, -50%);
+                border: 2px solid white;
+                border-radius: 50%;
+                background: #8094ffdd;
             }
 
             #attackButton {
                 position: absolute;
-                right: 25px;
+                right: 22px;
                 bottom: 35px;
-                width: 82px;
-                height: 82px;
+                width: 76px;
+                height: 76px;
+                padding: 0;
                 border: 2px solid #ffffffbb;
                 border-radius: 50%;
-                background: #ed4755dd;
-                color: white;
-                font-size: 15px;
-                font-weight: bold;
+                background: #e84958ee;
                 pointer-events: auto;
                 touch-action: none;
             }
 
             #statusMessage {
                 position: absolute;
-                top: 100px;
+                top: 105px;
                 left: 50%;
                 transform: translateX(-50%);
-                padding: 9px 14px;
-                border-radius: 9px;
-                background: #10131cbb;
-                text-align: center;
                 max-width: 90%;
+                padding: 9px 13px;
+                border-radius: 9px;
+                background: #10131cdd;
+                text-align: center;
             }
 
             #gameMenu {
@@ -203,8 +213,6 @@
                 background:
                     radial-gradient(circle at top, #303d78, transparent 60%),
                     #10131c;
-                color: white;
-                font-family: Arial, sans-serif;
             }
 
             #menuCard {
@@ -213,25 +221,22 @@
                 padding: 25px;
                 border: 1px solid #ffffff25;
                 border-radius: 20px;
-                background: #171c2bed;
-                box-shadow: 0 15px 50px #0008;
+                background: #171c2bf5;
                 text-align: center;
             }
 
             #menuCard h1 {
-                margin: 0 0 10px;
-                font-size: 28px;
+                margin-top: 0;
             }
 
             #menuCard p {
                 color: #c5cbe0;
-                line-height: 1.5;
             }
 
             #playerNameInput {
                 display: block;
                 width: 100%;
-                margin: 18px 0 12px;
+                margin: 20px 0 12px;
                 padding: 13px;
                 border: 1px solid #596cff;
                 border-radius: 10px;
@@ -239,17 +244,13 @@
                 background: #0d1120;
                 color: white;
                 font-size: 16px;
+                touch-action: auto;
+                user-select: text;
             }
 
             #playButton {
                 width: 100%;
                 padding: 14px;
-                border: 0;
-                border-radius: 10px;
-                background: #596cff;
-                color: white;
-                font-weight: bold;
-                font-size: 16px;
             }
 
             #menuConnection {
@@ -272,10 +273,6 @@
                 pointer-events: auto;
             }
 
-            #shopPanel h2 {
-                margin-top: 0;
-            }
-
             .shopItem {
                 display: flex;
                 align-items: center;
@@ -288,41 +285,32 @@
             }
 
             .shopItem button {
-                padding: 8px 10px;
-                border: 0;
-                border-radius: 8px;
-                background: #596cff;
-                color: white;
+                padding: 8px;
             }
 
             #closeShop {
                 width: 100%;
-                margin-top: 8px;
-                padding: 10px;
-                border: 0;
-                border-radius: 8px;
                 background: #394052;
-                color: white;
             }
 
             @media (max-width: 420px) {
                 #gameStats {
-                    min-width: 135px;
+                    min-width: 140px;
                     font-size: 12px;
                 }
 
                 #joystick {
-                    left: 18px;
-                    bottom: 24px;
-                    width: 108px;
-                    height: 108px;
+                    width: 105px;
+                    height: 105px;
+                    left: 16px;
+                    bottom: 22px;
                 }
 
                 #attackButton {
-                    right: 18px;
-                    bottom: 28px;
-                    width: 72px;
-                    height: 72px;
+                    right: 16px;
+                    bottom: 25px;
+                    width: 70px;
+                    height: 70px;
                 }
             }
         `;
@@ -333,7 +321,9 @@
     function createInterface() {
         addStyles();
 
-        const ui = createElement("div", "gameUI");
+        const ui = document.createElement("div");
+        ui.id = "gameUI";
+
         ui.innerHTML = `
             <div id="gameTop">
                 <div id="gameStats">
@@ -346,7 +336,6 @@
                     <div id="xpText">Опыт: 0</div>
                     <div id="connectionStatus">Нет подключения</div>
                 </div>
-
                 <button id="shopButton">Магазин</button>
             </div>
 
@@ -365,50 +354,48 @@
 
                 <div class="shopItem">
                     <span>Урон +5</span>
-                    <button id="buyDamage">Купить · 20</button>
+                    <button id="buyDamage">20 монет</button>
                 </div>
 
                 <div class="shopItem">
                     <span>Здоровье +25</span>
-                    <button id="buyHealth">Купить · 15</button>
+                    <button id="buyHealth">15 монет</button>
                 </div>
 
                 <div class="shopItem">
                     <span>Скорость +1</span>
-                    <button id="buySpeed">Купить · 25</button>
+                    <button id="buySpeed">25 монет</button>
                 </div>
 
                 <button id="closeShop">Закрыть</button>
             </div>
         `;
 
-        const menu = createElement("div", "gameMenu");
+        document.body.appendChild(ui);
+
+        const menu = document.createElement("div");
+        menu.id = "gameMenu";
 
         menu.innerHTML = `
             <div id="menuCard">
                 <h1>3D Multiplayer</h1>
-                <p>Введи имя и заходи в игровой мир.</p>
+                <p>Введи имя и отправляйся в город!</p>
                 <input
                     id="playerNameInput"
-                    type="text"
                     maxlength="20"
                     placeholder="Твоё имя"
                     autocomplete="nickname"
                 >
                 <button id="playButton">ИГРАТЬ</button>
-                <div id="menuConnection">
-                    Подготовка игры...
-                </div>
+                <div id="menuConnection">Подготовка игры...</div>
             </div>
         `;
 
-        $("shopPanel").style.display = "none";
-        menu.style.display = "flex";
+        document.body.appendChild(menu);
     }
 
     function showMessage(message, duration = 2200) {
         const element = $("statusMessage");
-
         if (!element) return;
 
         element.textContent = message;
@@ -417,68 +404,304 @@
         clearTimeout(showMessage.timer);
 
         showMessage.timer = setTimeout(() => {
-            if (element) {
-                element.style.display = "none";
-            }
+            element.style.display = "none";
         }, duration);
     }
 
     function updateInterface() {
-        if ($("healthText")) {
-            $("healthText").textContent =
-                `Здоровье: ${state.health}/${state.maxHealth}`;
+        $("healthText").textContent =
+            `Здоровье: ${state.health}/${state.maxHealth}`;
+
+        const hp = Math.max(
+            0,
+            Math.min(100, state.health / state.maxHealth * 100)
+        );
+
+        $("healthBar").style.width = hp + "%";
+
+        $("healthBar").style.background =
+            hp > 50 ? "#35dc75" :
+            hp > 25 ? "#ffd166" : "#ff4757";
+
+        $("levelText").textContent = `Уровень: ${state.level}`;
+        $("coinsText").textContent = `Монеты: ${state.coins}`;
+        $("xpText").textContent = `Опыт: ${state.xp}`;
+        $("shopCoins").textContent = state.coins;
+
+        const text = state.connected
+            ? "Сервер подключён"
+            : "Одиночный режим / нет сервера";
+
+        $("connectionStatus").textContent = text;
+
+        if (!state.started) {
+            $("menuConnection").textContent = text;
+        }
+    }
+
+    function addBox(x, y, z, width, height, depth, color) {
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(width, height, depth),
+            new THREE.MeshStandardMaterial({
+                color,
+                roughness: 0.9
+            })
+        );
+
+        mesh.position.set(x, y + height / 2, z);
+        scene.add(mesh);
+
+        return mesh;
+    }
+
+    function addRoad(x, z, width, depth) {
+        const road = new THREE.Mesh(
+            new THREE.PlaneGeometry(width, depth),
+            new THREE.MeshStandardMaterial({
+                color: 0x343941,
+                roughness: 1
+            })
+        );
+
+        road.rotation.x = -Math.PI / 2;
+        road.position.set(x, 0.025, z);
+        scene.add(road);
+    }
+
+    function addCityBlock(centerX, centerZ) {
+        const sidewalkColor = 0xb6b6b0;
+        const buildingColors = [
+            0x9b9ca5,
+            0xb9a38b,
+            0x777f8b,
+            0xc5c5c0,
+            0x8d9996,
+            0xa98f87
+        ];
+
+        const blockSize = 18;
+
+        // Земля квартала.
+        addBox(
+            centerX,
+            -0.15,
+            centerZ,
+            blockSize,
+            0.3,
+            blockSize,
+            0x66805a
+        );
+
+        // Тротуар вокруг квартала.
+        addBox(
+            centerX,
+            0.02,
+            centerZ - 8.5,
+            18,
+            0.12,
+            1.5,
+            sidewalkColor
+        );
+
+        addBox(
+            centerX,
+            0.02,
+            centerZ + 8.5,
+            18,
+            0.12,
+            1.5,
+            sidewalkColor
+        );
+
+        addBox(
+            centerX - 8.5,
+            0.02,
+            centerZ,
+            1.5,
+            0.12,
+            18,
+            sidewalkColor
+        );
+
+        addBox(
+            centerX + 8.5,
+            0.02,
+            centerZ,
+            1.5,
+            0.12,
+            18,
+            sidewalkColor
+        );
+
+        // Несколько зданий внутри квартала.
+        const spots = [
+            [-4.5, -4.5],
+            [4.5, -4.5],
+            [-4.5, 4.5],
+            [4.5, 4.5]
+        ];
+
+        spots.forEach((spot, index) => {
+            const width = 5 + (index % 2);
+            const depth = 5;
+            const height = 6 + ((index * 7) % 10);
+            const bx = centerX + spot[0];
+            const bz = centerZ + spot[1];
+
+            addBox(
+                bx,
+                0,
+                bz,
+                width,
+                height,
+                depth,
+                buildingColors[index % buildingColors.length]
+            );
+
+            // Крыша.
+            addBox(
+                bx,
+                height,
+                bz,
+                width + 0.2,
+                0.25,
+                depth + 0.2,
+                0x454953
+            );
+
+            // Окна на фасаде.
+            for (let floor = 1.5; floor < height - 1; floor += 2) {
+                for (let column = -1; column <= 1; column++) {
+                    const windowMesh = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.7, 0.9, 0.08),
+                        new THREE.MeshStandardMaterial({
+                            color: 0xffd995,
+                            emissive: 0x44351b
+                        })
+                    );
+
+                    windowMesh.position.set(
+                        bx + column * 1.3,
+                        floor,
+                        bz + depth / 2 + 0.06
+                    );
+
+                    scene.add(windowMesh);
+                }
+            }
+        });
+    }
+
+    function createCity() {
+        // Большая территория.
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(240, 240),
+            new THREE.MeshStandardMaterial({
+                color: 0x58784d,
+                roughness: 1
+            })
+        );
+
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -0.03;
+        scene.add(ground);
+
+        // Сетка улиц: две основные дороги и несколько кварталов.
+        const roadWidth = 10;
+        const blockStep = 28;
+
+        for (let i = -3; i <= 3; i++) {
+            addRoad(i * blockStep, 0, roadWidth, 220);
+            addRoad(0, i * blockStep, 220, roadWidth);
         }
 
-        if ($("healthBar")) {
-            const percent = state.maxHealth > 0
-                ? Math.max(0, state.health / state.maxHealth * 100)
-                : 0;
+        // Разметка на дорогах.
+        const lineMaterial = new THREE.MeshStandardMaterial({
+            color: 0xf1d77b,
+            emissive: 0x29210c
+        });
 
-            $("healthBar").style.width = `${percent}%`;
+        for (let z = -105; z <= 105; z += 7) {
+            const dash = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.18, 3),
+                lineMaterial
+            );
 
-            $("healthBar").style.background =
-                percent > 50 ? "#35dc75" :
-                percent > 25 ? "#ffd166" : "#ff4757";
+            dash.rotation.x = -Math.PI / 2;
+            dash.position.set(0, 0.045, z);
+            scene.add(dash);
         }
 
-        if ($("levelText")) {
-            $("levelText").textContent = `Уровень: ${state.level}`;
+        for (let x = -105; x <= 105; x += 7) {
+            const dash = new THREE.Mesh(
+                new THREE.PlaneGeometry(3, 0.18),
+                lineMaterial
+            );
+
+            dash.rotation.x = -Math.PI / 2;
+            dash.position.set(x, 0.05, 0);
+            scene.add(dash);
         }
 
-        if ($("coinsText")) {
-            $("coinsText").textContent = `Монеты: ${state.coins}`;
+        // Кварталы по обе стороны дорог.
+        for (let x = -2; x <= 2; x++) {
+            for (let z = -2; z <= 2; z++) {
+                if (x === 0 && z === 0) continue;
+
+                addCityBlock(
+                    x * blockStep + (x > 0 ? 0 : 0),
+                    z * blockStep + (z > 0 ? 0 : 0)
+                );
+            }
         }
 
-        if ($("xpText")) {
-            $("xpText").textContent = `Опыт: ${state.xp}`;
+        // Фонари вдоль главных дорог.
+        for (let p = -4; p <= 4; p++) {
+            for (const side of [-1, 1]) {
+                addStreetLamp(side * 7, p * 22);
+                addStreetLamp(p * 22, side * 7);
+            }
         }
+    }
 
-        if ($("shopCoins")) {
-            $("shopCoins").textContent = state.coins;
-        }
+    function addStreetLamp(x, z) {
+        const poleMaterial = new THREE.MeshStandardMaterial({
+            color: 0x353a42,
+            metalness: 0.6,
+            roughness: 0.5
+        });
 
-        const connectionText = state.connected
-            ? "Подключено"
-            : "Нет подключения к серверу";
+        const pole = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.09, 0.13, 4, 8),
+            poleMaterial
+        );
 
-        if ($("connectionStatus")) {
-            $("connectionStatus").textContent = connectionText;
-        }
+        pole.position.set(x, 2, z);
+        scene.add(pole);
 
-        if ($("menuConnection") && !state.started) {
-            $("menuConnection").textContent = connectionText;
-        }
+        const bulb = new THREE.Mesh(
+            new THREE.SphereGeometry(0.22, 8, 8),
+            new THREE.MeshStandardMaterial({
+                color: 0xffe3a1,
+                emissive: 0xffb84d,
+                emissiveIntensity: 1.2
+            })
+        );
+
+        bulb.position.set(x, 4.05, z);
+        scene.add(bulb);
     }
 
     function createWorld() {
         if (typeof THREE === "undefined") {
-            showMessage("Не удалось загрузить Three.js", 5000);
+            $("menuConnection").textContent =
+                "Ошибка: Three.js не загрузился";
             return false;
         }
 
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x9bb8d8);
-        scene.fog = new THREE.Fog(0x9bb8d8, 25, 100);
+        scene.background = new THREE.Color(0x9aafc9);
+        scene.fog = new THREE.Fog(0x9aafc9, 45, 190);
 
         camera = new THREE.PerspectiveCamera(
             75,
@@ -487,7 +710,12 @@
             500
         );
 
-        camera.position.set(0, 1.65, 5);
+        camera.position.set(
+            state.position.x,
+            1.65,
+            state.position.z
+        );
+
         camera.rotation.order = "YXZ";
 
         renderer = new THREE.WebGLRenderer({
@@ -510,115 +738,26 @@
             document.body.firstChild
         );
 
-        const ambient = new THREE.HemisphereLight(
-            0xdceaff,
-            0x424b36,
-            2
+        scene.add(
+            new THREE.HemisphereLight(0xdceaff, 0x414a35, 2)
         );
 
-        scene.add(ambient);
+        const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+        sun.position.set(30, 45, 20);
+        scene.add(sun);
 
-        const sunlight = new THREE.DirectionalLight(
-            0xffffff,
-            1.5
-        );
-
-        sunlight.position.set(20, 30, 10);
-        scene.add(sunlight);
-
-        const groundGeometry = new THREE.PlaneGeometry(200, 200);
-
-        const groundMaterial = new THREE.MeshStandardMaterial({
-            color: 0x507b48,
-            roughness: 1
-        });
-
-        ground = new THREE.Mesh(
-            groundGeometry,
-            groundMaterial
-        );
-
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = 0;
-        scene.add(ground);
-
-        createBuildings();
+        createCity();
 
         clock = new THREE.Clock();
 
         return true;
-    }
-
-    function createBuildings() {
-        const materials = [
-            new THREE.MeshStandardMaterial({ color: 0x858b98 }),
-            new THREE.MeshStandardMaterial({ color: 0xb5a28b }),
-            new THREE.MeshStandardMaterial({ color: 0x747e91 }),
-            new THREE.MeshStandardMaterial({ color: 0xc1c7cf })
-        ];
-
-        for (let i = 0; i < 32; i++) {
-            const width = 3 + Math.random() * 5;
-            const depth = 3 + Math.random() * 5;
-            const height = 4 + Math.random() * 15;
-
-            const geometry = new THREE.BoxGeometry(
-                width,
-                height,
-                depth
-            );
-
-            const building = new THREE.Mesh(
-                geometry,
-                materials[i % materials.length]
-            );
-
-            const angle = i / 32 * Math.PI * 2;
-            const radius = 17 + Math.random() * 22;
-
-            building.position.set(
-                Math.cos(angle) * radius,
-                height / 2,
-                Math.sin(angle) * radius
-            );
-
-            scene.add(building);
-
-            const windowMaterial = new THREE.MeshStandardMaterial({
-                color: 0xffdf91,
-                emissive: 0x55401c
-            });
-
-            for (let floor = 1; floor < height / 2; floor++) {
-                for (let column = 0; column < 2; column++) {
-                    const windowMesh = new THREE.Mesh(
-                        new THREE.BoxGeometry(0.45, 0.55, 0.06),
-                        windowMaterial
-                    );
-
-                    windowMesh.position.set(
-                        building.position.x +
-                            (column === 0 ? -width * 0.22 : width * 0.22),
-                        floor * 1.5,
-                        building.position.z + depth / 2 + 0.04
-                    );
-
-                    scene.add(windowMesh);
                 }
-            }
-        }
-        }
-        function createPlayerModel(color = 0x4f79ff) {
+        function createPlayerModel(color = 0xff665c) {
         const group = new THREE.Group();
-
-        const material = new THREE.MeshStandardMaterial({
-            color,
-            roughness: 0.8
-        });
 
         const body = new THREE.Mesh(
             new THREE.BoxGeometry(0.65, 1.1, 0.35),
-            material
+            new THREE.MeshStandardMaterial({ color })
         );
 
         body.position.y = 0.85;
@@ -632,14 +771,14 @@
         head.position.y = 1.55;
         group.add(head);
 
-        const legsMaterial = new THREE.MeshStandardMaterial({
+        const legMaterial = new THREE.MeshStandardMaterial({
             color: 0x29334d
         });
 
         for (const x of [-0.18, 0.18]) {
             const leg = new THREE.Mesh(
                 new THREE.BoxGeometry(0.2, 0.55, 0.22),
-                legsMaterial
+                legMaterial
             );
 
             leg.position.set(x, 0.28, 0);
@@ -652,14 +791,18 @@
     function addPlayer(id, data = {}) {
         if (!scene || id == null) return;
 
-        if (String(id) === String(state.myId)) return;
+        const key = String(id);
 
-        if (state.players.has(String(id))) {
+        if (state.myId != null && key === String(state.myId)) {
+            return;
+        }
+
+        if (state.players.has(key)) {
             updatePlayer(id, data);
             return;
         }
 
-        const model = createPlayerModel(0xff665c);
+        const model = createPlayerModel();
 
         model.position.set(
             Number(data.x) || 0,
@@ -669,15 +812,16 @@
 
         scene.add(model);
 
-        state.players.set(String(id), {
+        state.players.set(key, {
             model,
             name: data.name || "Игрок",
-            health: data.health ?? 100
+            health: Number(data.health ?? 100)
         });
     }
 
     function updatePlayer(id, data = {}) {
-        const player = state.players.get(String(id));
+        const key = String(id);
+        const player = state.players.get(key);
 
         if (!player) {
             addPlayer(id, data);
@@ -696,9 +840,7 @@
             player.model.rotation.y = Number(data.rotation);
         }
 
-        if (data.name) {
-            player.name = data.name;
-        }
+        if (data.name) player.name = data.name;
 
         if (data.health !== undefined) {
             player.health = Number(data.health) || 0;
@@ -712,18 +854,6 @@
         if (!player) return;
 
         scene.remove(player.model);
-
-        player.model.traverse((object) => {
-            if (object.geometry) object.geometry.dispose();
-            if (object.material) {
-                if (Array.isArray(object.material)) {
-                    object.material.forEach(material => material.dispose());
-                } else {
-                    object.material.dispose();
-                }
-            }
-        });
-
         state.players.delete(key);
     }
 
@@ -740,12 +870,6 @@
     }
 
     function connectToServer() {
-        if (state.socket) {
-            try {
-                state.socket.close();
-            } catch (_) {}
-        }
-
         let url = CONFIG.serverUrl.trim();
 
         if (!url) {
@@ -756,17 +880,6 @@
             url = `${protocol}//${location.host}`;
         }
 
-        if (
-            location.protocol === "https:" &&
-            url.startsWith("ws://")
-        ) {
-            showMessage(
-                "Для HTTPS нужен защищённый WebSocket (wss://)",
-                4000
-            );
-            return;
-        }
-
         let socket;
 
         try {
@@ -774,7 +887,7 @@
         } catch (error) {
             state.connected = false;
             updateInterface();
-            showMessage("Не удалось создать подключение", 3000);
+            showMessage("Не удалось подключиться к серверу");
             return;
         }
 
@@ -786,17 +899,17 @@
             if (state.socket !== socket) return;
 
             state.connected = true;
-            updateInterface();
 
             sendServer({
                 type: "join",
                 name: state.name
             });
 
-            showMessage("Соединение с сервером установлено");
+            updateInterface();
+            showMessage("Соединение установлено");
         });
 
-        socket.addEventListener("message", (event) => {
+        socket.addEventListener("message", event => {
             if (state.socket !== socket) return;
 
             let data;
@@ -817,7 +930,7 @@
             updateInterface();
 
             if (state.started) {
-                showMessage("Связь с сервером потеряна", 4000);
+                showMessage("Связь с сервером потеряна");
             }
         });
 
@@ -834,12 +947,24 @@
 
         switch (data.type) {
             case "welcome": {
-                if (data.id !== undefined) {
+                if (data.id != null) {
                     state.myId = data.id;
                 }
 
+                if (Number.isFinite(Number(data.x))) {
+                    state.position.x = Number(data.x);
+                }
+
+                if (Number.isFinite(Number(data.z))) {
+                    state.position.z = Number(data.z);
+                }
+
+                if (Number.isFinite(Number(data.rotation))) {
+                    state.yaw = Number(data.rotation);
+                }
+
                 if (data.health !== undefined) {
-                    state.health = Number(data.health) || state.health;
+                    state.health = Number(data.health);
                 }
 
                 if (data.maxHealth !== undefined) {
@@ -858,20 +983,6 @@
                     state.xp = Number(data.xp) || 0;
                 }
 
-                if (Number.isFinite(Number(data.x))) {
-                    state.position.x = Number(data.x);
-                }
-
-                if (Number.isFinite(Number(data.z))) {
-                    state.position.z = Number(data.z);
-                }
-
-                if (Number.isFinite(Number(data.rotation))) {
-                    state.yaw = Number(data.rotation);
-                }
-
-                updateInterface();
-
                 if (Array.isArray(data.players)) {
                     data.players.forEach(player => {
                         if (player.id != null) {
@@ -880,6 +991,7 @@
                     });
                 }
 
+                updateInterface();
                 break;
             }
 
@@ -917,19 +1029,12 @@
                 players.forEach(player => {
                     if (player.id == null) return;
 
-                    if (String(player.id) === String(state.myId)) {
-                        if (Number.isFinite(Number(player.x))) {
-                            state.position.x = Number(player.x);
-                        }
-
-                        if (Number.isFinite(Number(player.z))) {
-                            state.position.z = Number(player.z);
-                        }
-
-                        if (Number.isFinite(Number(player.health))) {
-                            state.health = Number(player.health);
-                        }
-
+                    if (
+                        state.myId != null &&
+                        String(player.id) === String(state.myId)
+                    ) {
+                        // Не перезаписываем локальное движение:
+                        // иначе игрок может дёргаться назад.
                         return;
                     }
 
@@ -941,10 +1046,10 @@
             }
 
             case "playerJoined": {
-                if (data.player && data.player.id != null) {
-                    addPlayer(data.player.id, data.player);
-                } else if (data.id != null) {
-                    addPlayer(data.id, data);
+                const player = data.player || data;
+
+                if (player.id != null) {
+                    addPlayer(player.id, player);
                 }
 
                 break;
@@ -964,10 +1069,9 @@
                         0,
                         Number(data.health) || 0
                     );
-
-                    updateInterface();
                 }
 
+                updateInterface();
                 showMessage(data.message || "Получен урон");
                 break;
             }
@@ -988,7 +1092,7 @@
             }
 
             default: {
-                if (data.id != null && data.id !== state.myId) {
+                if (data.id != null) {
                     updatePlayer(data.id, data);
                 }
             }
@@ -1002,30 +1106,16 @@
         const name = input ? input.value.trim() : "";
 
         if (!name) {
-            showMessage("Сначала введи имя", 2500);
-
-            if (input) input.focus();
-
+            $("menuConnection").textContent = "Сначала введи имя";
+            input?.focus();
             return;
         }
 
-        if (name.length > 20) {
-            showMessage("Имя должно быть не длиннее 20 символов");
-            return;
-        }
-
-        if (!scene || !camera || !renderer) {
-            showMessage("Игровой мир ещё не готов", 3000);
-            return;
-        }
-
-        state.name = name;
+        state.name = name.slice(0, 20);
         state.started = true;
 
         $("gameMenu").style.display = "none";
         $("gameUI").style.display = "block";
-
-        state.position.set(0, 0, 5);
 
         camera.position.set(
             state.position.x,
@@ -1033,11 +1123,10 @@
             state.position.z
         );
 
-        camera.rotation.order = "YXZ";
         camera.rotation.set(state.pitch, state.yaw, 0);
 
-        connectToServer();
         updateInterface();
+        connectToServer();
 
         showMessage("Добро пожаловать, " + state.name + "!");
     }
@@ -1045,20 +1134,12 @@
     function openShop() {
         if (!state.started) return;
 
-        const panel = $("shopPanel");
-
-        if (panel) {
-            panel.style.display = "block";
-            updateInterface();
-        }
+        $("shopPanel").style.display = "block";
+        updateInterface();
     }
 
     function closeShop() {
-        const panel = $("shopPanel");
-
-        if (panel) {
-            panel.style.display = "none";
-        }
+        $("shopPanel").style.display = "none";
     }
 
     function buyUpgrade(type, price) {
@@ -1068,39 +1149,40 @@
         }
 
         if (!state.connected) {
-            showMessage("Магазин доступен после подключения к серверу");
+            showMessage("Покупки требуют подключения к серверу");
             return;
         }
 
-        const sent = sendServer({
+        sendServer({
             type: "buy",
             item: type,
             price
         });
-
-        if (!sent) {
-            showMessage("Не удалось отправить покупку");
-        }
-            }
+                }
         function setupControls() {
         const joystick = $("joystick");
-        const stick = $("joystickStick");
+        const joystickKnob = $("joystickKnob");
         const lookZone = $("lookZone");
         const attackButton = $("attackButton");
+        const startButton = $("startButton");
+        const shopButton = $("shopButton");
+        const closeShopButton = $("closeShopButton");
 
-        if (!joystick || !stick || !lookZone || !attackButton) {
-            return;
-        }
+        let joystickPointer = null;
+        let lookPointer = null;
+        let joystickRect = null;
 
         function updateJoystick(event) {
+            if (joystickPointer !== event.pointerId) return;
+
             const rect = joystick.getBoundingClientRect();
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
+            const maxDistance = rect.width * 0.31;
 
             let dx = event.clientX - centerX;
             let dy = event.clientY - centerY;
 
-            const maxDistance = rect.width * 0.34;
             const distance = Math.hypot(dx, dy);
 
             if (distance > maxDistance) {
@@ -1111,26 +1193,31 @@
             state.moveX = dx / maxDistance;
             state.moveZ = dy / maxDistance;
 
-            stick.style.left =
-                `calc(50% + ${dx}px)`;
-
-            stick.style.top =
-                `calc(50% + ${dy}px)`;
+            joystickKnob.style.transform =
+                `translate(${dx}px, ${dy}px)`;
         }
 
-        function resetJoystick() {
+        function resetJoystick(event) {
+            if (
+                event &&
+                joystickPointer !== null &&
+                event.pointerId !== joystickPointer
+            ) {
+                return;
+            }
+
+            joystickPointer = null;
             state.moveX = 0;
             state.moveZ = 0;
-            state.joystickActive = false;
 
-            stick.style.left = "50%";
-            stick.style.top = "50%";
+            joystickKnob.style.transform = "translate(0, 0)";
         }
 
         joystick.addEventListener("pointerdown", event => {
-            event.preventDefault();
+            if (joystickPointer !== null) return;
 
-            state.joystickActive = true;
+            event.preventDefault();
+            joystickPointer = event.pointerId;
 
             try {
                 joystick.setPointerCapture(event.pointerId);
@@ -1139,24 +1226,17 @@
             updateJoystick(event);
         });
 
-        joystick.addEventListener("pointermove", event => {
-            if (!state.joystickActive) return;
-
-            event.preventDefault();
-            updateJoystick(event);
-        });
-
+        joystick.addEventListener("pointermove", updateJoystick);
         joystick.addEventListener("pointerup", resetJoystick);
         joystick.addEventListener("pointercancel", resetJoystick);
         joystick.addEventListener("lostpointercapture", resetJoystick);
 
         lookZone.addEventListener("pointerdown", event => {
-            if (!state.started) return;
-            if (event.pointerType === "mouse" && event.button !== 0) return;
+            if (!state.started || lookPointer !== null) return;
 
-            event.preventDefault();
+            if (event.pointerType === "mouse") return;
 
-            state.lookActive = true;
+            lookPointer = event.pointerId;
             state.lastTouchX = event.clientX;
             state.lastTouchY = event.clientY;
 
@@ -1166,9 +1246,7 @@
         });
 
         lookZone.addEventListener("pointermove", event => {
-            if (!state.lookActive || !state.started) return;
-
-            event.preventDefault();
+            if (lookPointer !== event.pointerId) return;
 
             const dx = event.clientX - state.lastTouchX;
             const dy = event.clientY - state.lastTouchY;
@@ -1176,53 +1254,67 @@
             state.lastTouchX = event.clientX;
             state.lastTouchY = event.clientY;
 
-            const sensitivity = event.pointerType === "mouse"
-                ? CONFIG.mouseSensitivity
-                : CONFIG.touchSensitivity;
-
-            state.yaw -= dx * sensitivity;
-            state.pitch -= dy * sensitivity;
-
-            const limit = Math.PI / 2 - 0.05;
+            state.yaw -= dx * CONFIG.touchSensitivity;
+            state.pitch -= dy * CONFIG.touchSensitivity;
 
             state.pitch = Math.max(
-                -limit,
-                Math.min(limit, state.pitch)
+                -1.35,
+                Math.min(1.35, state.pitch)
             );
         });
 
-        function stopLooking() {
-            state.lookActive = false;
+        function stopLooking(event) {
+            if (event && lookPointer !== event.pointerId) return;
+            lookPointer = null;
         }
 
         lookZone.addEventListener("pointerup", stopLooking);
         lookZone.addEventListener("pointercancel", stopLooking);
         lookZone.addEventListener("lostpointercapture", stopLooking);
 
+        document.addEventListener("pointermove", event => {
+            if (!state.started) return;
+            if (event.pointerType !== "mouse") return;
+            if (document.pointerLockElement !== renderer.domElement) return;
+
+            state.yaw -= event.movementX * CONFIG.mouseSensitivity;
+            state.pitch -= event.movementY * CONFIG.mouseSensitivity;
+
+            state.pitch = Math.max(
+                -1.35,
+                Math.min(1.35, state.pitch)
+            );
+        });
+
+        renderer.domElement.addEventListener("click", () => {
+            if (
+                state.started &&
+                !("ontouchstart" in window) &&
+                document.pointerLockElement !== renderer.domElement
+            ) {
+                renderer.domElement.requestPointerLock?.();
+            }
+        });
+
         document.addEventListener("keydown", event => {
-            state.keys[event.key.toLowerCase()] = true;
+            const key = event.key.toLowerCase();
+
+            state.keys[key] = true;
 
             if (
                 ["w", "a", "s", "d", "arrowup", "arrowdown",
-                    "arrowleft", "arrowright", " "].includes(
-                    event.key.toLowerCase()
-                )
+                 "arrowleft", "arrowright", " "].includes(key)
             ) {
                 event.preventDefault();
             }
 
-            if (event.key.toLowerCase() === "e") {
-                const panel = $("shopPanel");
-
-                if (panel && panel.style.display === "none") {
-                    openShop();
-                } else {
-                    closeShop();
-                }
+            if (key === " " && state.started) {
+                attack();
             }
 
-            if (event.code === "Space") {
-                attack();
+            if (key === "escape") {
+                closeShop();
+                document.exitPointerLock?.();
             }
         });
 
@@ -1233,39 +1325,36 @@
         window.addEventListener("blur", () => {
             state.keys = {};
             resetJoystick();
-            stopLooking();
         });
 
         attackButton.addEventListener("pointerdown", event => {
             event.preventDefault();
+            event.stopPropagation();
             attack();
         });
 
-        $("shopButton").addEventListener("click", openShop);
-        $("closeShop").addEventListener("click", closeShop);
+        startButton.addEventListener("click", startGame);
+        shopButton.addEventListener("click", openShop);
+        closeShopButton.addEventListener("click", closeShop);
 
         $("buyDamage").addEventListener("click", () => {
-            buyUpgrade("damage", 20);
-        });
-
-        $("buyHealth").addEventListener("click", () => {
-            buyUpgrade("health", 15);
+            buyUpgrade("damage", 50);
         });
 
         $("buySpeed").addEventListener("click", () => {
-            buyUpgrade("speed", 25);
+            buyUpgrade("speed", 75);
         });
 
-        $("playButton").addEventListener("click", startGame);
+        $("buyHealth").addEventListener("click", () => {
+            buyUpgrade("health", 40);
+        });
 
-        $("playerNameInput").addEventListener("keydown", event => {
-            if (event.key === "Enter") {
-                startGame();
-            }
+        $("playerName").addEventListener("keydown", event => {
+            if (event.key === "Enter") startGame();
         });
 
         window.addEventListener("resize", () => {
-            if (!camera || !renderer) return;
+            if (!renderer || !camera) return;
 
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -1282,83 +1371,31 @@
 
         const now = performance.now();
 
-        if (now - state.lastAttack < CONFIG.attackCooldown) {
-            return;
-        }
+        if (now - state.lastAttack < CONFIG.attackCooldown) return;
 
         state.lastAttack = now;
 
-        let nearestId = null;
-        let nearestDistance = CONFIG.attackDistance;
-
-        const forward = new THREE.Vector3(
-            -Math.sin(state.yaw),
-            0,
-            -Math.cos(state.yaw)
-        );
-
-        for (const [id, player] of state.players) {
-            const offset = new THREE.Vector3(
-                player.model.position.x - state.position.x,
-                0,
-                player.model.position.z - state.position.z
-            );
-
-            const distance = offset.length();
-
-            if (distance > nearestDistance || distance < 0.001) {
-                continue;
-            }
-
-            offset.normalize();
-
-            if (forward.dot(offset) < 0.45) {
-                continue;
-            }
-
-            nearestId = id;
-            nearestDistance = distance;
-        }
-
-        if (nearestId !== null) {
+        if (state.connected) {
             sendServer({
                 type: "attack",
-                target: nearestId,
-                damage: state.damage
+                yaw: state.yaw,
+                pitch: state.pitch
             });
-
-            showMessage("Атака отправлена");
         } else {
-            sendServer({
-                type: "attack",
-                damage: state.damage
-            });
-
-            showMessage("Удар!");
+            showMessage("Для нанесения урона нужен сервер");
         }
     }
 
     function updateMovement(delta) {
-        if (!state.started || !state.position) return;
+        if (!state.started) return;
 
         let forward = 0;
         let strafe = 0;
 
-        if (state.keys["w"] || state.keys["arrowup"]) {
-            forward += 1;
-        }
-
-        if (state.keys["s"] || state.keys["arrowdown"]) {
-            forward -= 1;
-        }
-
-        if (state.keys["a"] || state.keys["arrowleft"]) {
-            strafe -= 1;
-        }
-
-        if (state.keys["d"] || state.keys["arrowright"]) {
-            strafe += 1;
-        }
+        if (state.keys["w"] || state.keys["arrowup"]) forward += 1;
+        if (state.keys["s"] || state.keys["arrowdown"]) forward -= 1;
+        if (state.keys["d"] || state.keys["arrowright"]) strafe += 1;
+        if (state.keys["a"] || state.keys["arrowleft"]) strafe -= 1;
 
         forward -= state.moveZ;
         strafe += state.moveX;
@@ -1372,18 +1409,16 @@
 
         const speed = state.speed * delta;
 
-        const dx =
-            -Math.sin(state.yaw) * forward * speed +
-            Math.cos(state.yaw) * strafe * speed;
+        state.position.x += (
+            -Math.sin(state.yaw) * forward +
+            Math.cos(state.yaw) * strafe
+        ) * speed;
 
-        const dz =
-            -Math.cos(state.yaw) * forward * speed -
-            Math.sin(state.yaw) * strafe * speed;
+        state.position.z += (
+            -Math.cos(state.yaw) * forward -
+            Math.sin(state.yaw) * strafe
+        ) * speed;
 
-        state.position.x += dx;
-        state.position.z += dz;
-
-        // Камера находится на уровне глаз игрока.
         camera.position.set(
             state.position.x,
             1.65,
@@ -1391,25 +1426,21 @@
         );
 
         camera.rotation.order = "YXZ";
-        camera.rotation.set(
-            state.pitch,
-            state.yaw,
-            0
-        );
+        camera.rotation.y = state.yaw;
+        camera.rotation.x = state.pitch;
+        camera.rotation.z = 0;
 
-        // Не отправляем координаты каждый кадр.
-        state.networkTimer = (state.networkTimer || 0) + delta;
+        state.networkTimer += delta;
 
-        if (state.networkTimer >= 0.05) {
+        if (state.connected && state.networkTimer >= 0.05) {
             state.networkTimer = 0;
 
             sendServer({
-                type: "input",
+                type: "move",
                 x: state.position.x,
                 z: state.position.z,
-                rotation: state.yaw,
-                forward,
-                strafe
+                yaw: state.yaw,
+                pitch: state.pitch
             });
         }
     }
@@ -1427,21 +1458,11 @@
     }
 
     function init() {
+        addStyles();
         createInterface();
-
-        if (!createWorld()) {
-            $("menuConnection").textContent =
-                "Ошибка загрузки 3D-движка";
-            return;
-        }
-
-        // Координаты игрока хранятся отдельно от камеры.
-        state.position = new THREE.Vector3(0, 0, 5);
-
+        createWorld();
         setupControls();
-
         updateInterface();
-
         animate();
     }
 
